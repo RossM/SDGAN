@@ -941,9 +941,17 @@ def main():
                 mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # Compute GAN loss
-                pred_fake = discriminator(torch.cat((noisy_latents, model_pred), 1), timesteps, encoder_hidden_states)
-                gan_loss = F.mse_loss(pred_fake, torch.ones_like(pred_fake), reduction="mean")
-                del pred_fake
+                discriminator_input = get_discriminator_input(
+                    discriminator=discriminator,
+                    noise_scheduler=noise_scheduler,
+                    noisy_latents=noisy_latents,
+                    model_pred=model_pred,
+                    timesteps=timesteps,
+                    noise=noise,
+                )
+                discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
+                gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
+                del discriminator_input, discriminator_pred
                 
                 # Compute total loss
                 loss = mse_loss + args.gan_weight * gan_loss
