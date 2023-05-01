@@ -76,6 +76,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
         safety_checker=None,
         revision=args.revision,
         torch_dtype=weight_dtype,
+        requires_safety_checker=False,
     )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
@@ -860,7 +861,7 @@ def main():
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(range(global_step, args.max_train_steps + resume_step), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
 
     for epoch in range(first_epoch, args.num_train_epochs):
@@ -994,6 +995,8 @@ def main():
                         logger.info(f"Saved state to {save_path}")
 
             if global_step >= args.max_train_steps:
+                break
+            if fixed_epoch_len and step >= epoch_len:
                 break
 
         if accelerator.is_main_process:
