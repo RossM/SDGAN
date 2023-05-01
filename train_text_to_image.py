@@ -681,6 +681,7 @@ def main():
                 args.webdataset_urls,
                 repeat=True,
                 shardshuffle=1000,
+                nodesplitter=webdataset.split_by_node,
                 handler=webdataset.warn_and_continue,
             )
             .shuffle(5000)
