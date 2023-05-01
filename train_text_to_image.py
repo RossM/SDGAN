@@ -672,7 +672,7 @@ def main():
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
     if args.webdataset_urls is not None:
-        epoch_len = 10000
+        epoch_len = 100000 // (args.train_batch_size * accelerator.num_processes)
         dataset_len = None
         fixed_epoch_len = True
         image_column = args.image_column or "image"
@@ -689,7 +689,7 @@ def main():
             .decode("pil")
             .rename(image="png;jpg;jpeg")
             .map(preprocess_one)
-            .with_epoch(epoch_len)
+            .with_epoch(epoch_len * args.train_batch_size * accelerator.num_processes)
         )
 
         # DataLoaders creation:
