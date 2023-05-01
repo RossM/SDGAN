@@ -46,8 +46,9 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
-import discriminator
+import discriminator, trainer_util
 from discriminator import Discriminator2D
+from trainer_util import get_discriminator_input
 
 if is_wandb_available():
     import wandb
@@ -671,7 +672,7 @@ def main():
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
     if args.webdataset_urls is not None:
-        epoch_len = 100000
+        epoch_len = 100000 // (args.train_batch_size * accelerator.num_processes)
         dataset_len = None
         fixed_epoch_len = True
         image_column = args.image_column or "image"
@@ -688,7 +689,7 @@ def main():
             .decode("pil")
             .rename(image="png;jpg;jpeg")
             .map(preprocess_one)
-            .with_epoch(epoch_len)
+            .with_epoch(epoch_len * args.train_batch_size * accelerator.num_processes)
         )
 
         # DataLoaders creation:
@@ -912,16 +913,26 @@ def main():
                 discriminator.requires_grad_(True)
 
                 # Train discriminator
-                pred_fake = discriminator(torch.cat((noisy_latents, model_pred), 1).detach(), timesteps, encoder_hidden_states)
-                pred_real = discriminator(torch.cat((noisy_latents, target), 1), timesteps, encoder_hidden_states)
-                discriminator_loss = F.mse_loss(pred_fake, torch.zeros_like(pred_fake), reduction="mean") + F.mse_loss(pred_real, torch.ones_like(pred_real), reduction="mean")
+                discriminator_input = get_discriminator_input(
+                    discriminator=discriminator,
+                    noise_scheduler=noise_scheduler,
+                    noisy_latents=noisy_latents,
+                    model_pred=torch.cat((target, model_pred), 0),
+                    timesteps=timesteps,
+                    noise=noise,
+                )
+                discriminator_input.detach_()
+                discriminator_pred = discriminator(discriminator_input, timesteps.repeat(2), encoder_hidden_states.repeat(2, 1, 1))
+                discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
+                discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
                 accelerator.backward(discriminator_loss)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                 optimizer_discriminator.step()
                 lr_scheduler_discriminator.step()
                 optimizer_discriminator.zero_grad()
-                del pred_real, pred_fake, discriminator_loss
+                del discriminator_input, discriminator_pred, discriminator_target
+                discriminator_loss.detach_()
                 
                 # Freeze discriminator again for unet step
                 discriminator.requires_grad_(False)
@@ -948,6 +959,16 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+                mse_loss.detach_()
+                gan_loss.detach_()
+
+            logs = {
+                "mse_loss": mse_loss.item(),
+                "gan_loss": gan_loss.item(),
+                "d_loss": discriminator_loss.item(),
+                "lr": lr_scheduler.get_last_lr()[0]
+            }
+            progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -955,7 +976,7 @@ def main():
                     ema_unet.step(unet.parameters())
                 progress_bar.update(1)
                 global_step += 1
-                accelerator.log({"train_loss": train_loss}, step=global_step)
+                accelerator.log(logs, step=global_step)
                 train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
@@ -963,9 +984,6 @@ def main():
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
-
-            logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
-            progress_bar.set_postfix(**logs)
 
             if global_step >= args.max_train_steps:
                 break
