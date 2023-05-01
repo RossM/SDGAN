@@ -668,6 +668,10 @@ def main():
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
         input_ids = torch.stack([example["input_ids"] for example in examples])
         return {"pixel_values": pixel_values, "input_ids": input_ids}
+        
+    def size_check(sample):
+        image = sample[image_column]
+        return image.size[0] >= args.resolution and image.size[1] >= args.resolution
 
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
@@ -688,9 +692,11 @@ def main():
             )
             .shuffle(5000)
             .decode("pil")
-            .rename(image="png;jpg;jpeg")
+            .rename(**{image_column: "png;jpg;jpeg"})
+            .select(size_check)
             .map(preprocess_one)
             .with_epoch(epoch_len * args.train_batch_size * accelerator.num_processes)
+            #.batched(args.train_batch_size)
         )
 
         # DataLoaders creation:
