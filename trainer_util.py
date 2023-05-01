@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import einops
 from diffusers import DDPMScheduler
 from torch import Tensor
+from discriminator import Discriminator2D
 
 def get_predicted_latents(
         noisy_latents: Tensor, 
