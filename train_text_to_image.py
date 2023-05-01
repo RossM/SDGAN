@@ -671,7 +671,7 @@ def main():
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
 
     if args.webdataset_urls is not None:
-        epoch_len = 100000
+        epoch_len = 10000
         dataset_len = None
         fixed_epoch_len = True
         image_column = args.image_column or "image"
