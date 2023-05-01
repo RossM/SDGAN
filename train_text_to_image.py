@@ -552,11 +552,11 @@ def main():
             if args.use_ema:
                 ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
-            for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, "unet"))
+            # for i, model in enumerate(models):
+                # model.save_pretrained(os.path.join(output_dir, "unet"))
 
-                # make sure to pop weight so that corresponding model is not saved again
-                weights.pop()
+                # # make sure to pop weight so that corresponding model is not saved again
+                # weights.pop()
 
         # TODO(rossm): Handle discriminator
         def load_model_hook(models, input_dir):
@@ -566,16 +566,16 @@ def main():
                 ema_unet.to(accelerator.device)
                 del load_model
 
-            for i in range(len(models)):
-                # pop models so that they are not loaded again
-                model = models.pop()
+            # for i in range(len(models)):
+                # # pop models so that they are not loaded again
+                # model = models.pop()
 
-                # load diffusers style into model
-                load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
-                model.register_to_config(**load_model.config)
+                # # load diffusers style into model
+                # load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
+                # model.register_to_config(**load_model.config)
 
-                model.load_state_dict(load_model.state_dict())
-                del load_model
+                # model.load_state_dict(load_model.state_dict())
+                # del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
