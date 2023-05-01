@@ -18,7 +18,7 @@ def get_predicted_latents(
     noisy_latents = noisy_latents.float()
     model_pred = model_pred.float()
     
-    alphas_cumprod = noise_scheduler.alphas_cumprod
+    alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
     
     sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
     sqrt_alpha_prod = sqrt_alpha_prod.flatten()
