@@ -1,0 +1,12 @@
+accelerate
+datasets
+diffusers>=0.15.0
+einops
+huggingface_hub
+numpy
+packaging
+torch
+torchvision
+tqdm
+transformers
+webdataset
