@@ -48,7 +48,7 @@ from diffusers.utils.import_utils import is_xformers_available
 
 import discriminator, trainer_util
 from discriminator import Discriminator2D
-from trainer_util import get_discriminator_input
+from trainer_util import get_discriminator_input, log_grad_norm
 
 if is_wandb_available():
     import wandb
@@ -933,6 +933,7 @@ def main():
                 discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
                 discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
                 accelerator.backward(discriminator_loss)
+                log_grad_norm("discriminator", discriminator, accelerator, global_step)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                 optimizer_discriminator.step()
@@ -971,6 +972,7 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
+                log_grad_norm("unet", unet, accelerator, global_step)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()

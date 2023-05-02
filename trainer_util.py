@@ -1,8 +1,10 @@
 import torch
 import torch.nn.functional as F
 import einops
+from accelerate import Accelerator
 from diffusers import DDPMScheduler
 from torch import Tensor
+from torch.nn import Module
 from discriminator import Discriminator2D
 
 def get_predicted_latents(
@@ -82,3 +84,10 @@ def batch_repeat(x: Tensor, count: int):
     if count == 1:
         return x
     return einops.repeat(x, 'b ... -> (c b) ...', c=count)
+
+def log_grad_norm(model_name: str, model: Module, accelerator: Accelerator, global_step: int):
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grads = param.grad.detach().data
+            grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            accelerator.log({f"grad_norm/{model_name}/{name}": grad_norm}, step=global_step)
