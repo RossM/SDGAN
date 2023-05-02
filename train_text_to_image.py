@@ -1006,7 +1006,7 @@ def main():
 
             if global_step >= args.max_train_steps:
                 break
-            if fixed_epoch_len and step >= epoch_len:
+            if fixed_epoch_len and step + 1 >= epoch_len:
                 break
 
         if accelerator.is_main_process:
