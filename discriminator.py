@@ -179,7 +179,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         else:
             d_channels = sum(block_out_channels[1:]) + embedding_dim
         for c in mlp_hidden_channels:
-            self.to_out.append(nn.Linear(d_channels, c))
+            self.to_out.append(nn.Linear(d_channels, c, bias=not mlp_uses_norm))
             if mlp_uses_norm:
                 self.to_out.append(nn.GroupNorm(groups, c))
             self.to_out.append(nn.SiLU())
