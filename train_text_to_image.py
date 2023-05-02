@@ -961,7 +961,9 @@ def main():
                 del discriminator_input, discriminator_pred
                 
                 # Compute total loss
-                loss = mse_loss + args.gan_weight * gan_loss
+                # If GAN loss starts getting too high, the GAN training may be collapsing. Reduce the
+                # influence of the GAN to allow training to stabilize
+                loss = mse_loss + args.gan_weight * gan_loss * (1 if gan_loss < 0.5 else 0.1)
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
