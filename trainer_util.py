@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn.functional as F
 import einops
@@ -89,5 +90,5 @@ def log_grad_norm(model_name: str, model: Module, accelerator: Accelerator, glob
     for name, param in model.named_parameters():
         if param.grad is not None:
             grads = param.grad.detach().data
-            grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            grad_norm = (grads.norm(p=2) / math.sqrt(grads.numel())).item()
             accelerator.log({f"grad_norm/{model_name}/{name}": grad_norm}, step=global_step)
