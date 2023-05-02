@@ -19,21 +19,21 @@ class Residual(nn.Sequential):
             x = module(x)
         return x + input
 
-def ConvLayer(dim, dim_out, *, kernel_size=3, groups=32):
+def ConvLayer(dim, dim_out, *, kernel_size=3, groups=32, bias=True):
     return nn.Sequential(
         nn.GroupNorm(groups, dim),
         nn.SiLU(),
-        nn.Conv2d(dim, dim_out, kernel_size=kernel_size, padding=kernel_size//2),
+        nn.Conv2d(dim, dim_out, kernel_size=kernel_size, padding=kernel_size//2, bias=bias),
     )
 
 class ResnetBlock(nn.Module):
     def __init__(self, dim, *, kernel_size=3, groups=32, time_embedding_dim=128):
         super().__init__()
         self.conv_in = ConvLayer(dim, dim, kernel_size=kernel_size, groups=groups)
-        self.conv_out = ConvLayer(dim, dim, kernel_size=kernel_size, groups=groups)
+        self.conv_out = ConvLayer(dim, dim, kernel_size=kernel_size, groups=groups, bias=False)
         
         nn.init.zeros_(self.conv_out[2].weight)
-        nn.init.zeros_(self.conv_out[2].bias)
+        #nn.init.zeros_(self.conv_out[2].bias)
         
         if time_embedding_dim > 0:
             self.embed_in = nn.Linear(time_embedding_dim, dim, bias=False)
@@ -58,7 +58,7 @@ class SequentialWithTimestep(nn.Sequential):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32):
+    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32, bias=True):
         super().__init__()
         self.dim = dim
         self.out_dim = dim
@@ -68,10 +68,11 @@ class SelfAttention(nn.Module):
         self.to_k = nn.Linear(dim, key_dim)
         self.to_v = nn.Linear(dim, value_dim)
         self.to_q = nn.Linear(dim, key_dim * heads)
-        self.to_out = nn.Linear(value_dim * heads, out_dim)
+        self.to_out = nn.Linear(value_dim * heads, out_dim, bias=bias)
         
         nn.init.zeros_(self.to_out.weight)
-        nn.init.zeros_(self.to_out.bias)
+        if bias:
+            nn.init.zeros_(self.to_out.bias)
         
         self.use_efficient_attention = hasattr(F, "scaled_dot_product_attention")
 
@@ -101,7 +102,7 @@ def SelfAttentionBlock(dim, attention_dim, *, heads=8, groups=32):
         attention_dim = dim // heads
     return Residual(
         nn.GroupNorm(groups, dim),
-        SelfAttention(dim, dim, heads=heads, key_dim=attention_dim, value_dim=attention_dim),
+        SelfAttention(dim, dim, heads=heads, key_dim=attention_dim, value_dim=attention_dim, bias=False),
     )
 
 class AdaptiveReduce(nn.Module):
