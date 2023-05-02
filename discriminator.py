@@ -185,7 +185,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             self.to_out.append(nn.SiLU())
             d_channels = c
         final_layer = nn.Linear(d_channels, out_channels)
-        nn.init.constant_(final_layer.bias, 0.5)
+        nn.init.zeros_(final_layer.bias)
         self.to_out.append(final_layer)
         
         self.gradient_checkpointing = False
@@ -210,5 +210,5 @@ class Discriminator2D(ModelMixin, ConfigMixin):
                 x = block(x, time_embed)
             x_mean = block_mean(x)
             d = torch.cat([d, x_mean], dim=-1)
-        return self.to_out(d)
+        return self.to_out(d) + 0.5
 
