@@ -98,3 +98,7 @@ def log_grad_norm(model_name: str, model: Module, accelerator: Accelerator, glob
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / math.sqrt(grads.numel())).item()
             accelerator.log({f"grad_norm/{model_name}/{name}": grad_norm}, step=global_step)
+            if global_step % 10 == 0:
+                values = param.detach().data
+                value_norm = (values.norm(p=2) / math.sqrt(values.numel())).item()
+                accelerator.log({f"value_norm/{model_name}/{name}": value_norm}, step=global_step)
