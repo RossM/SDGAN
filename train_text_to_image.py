@@ -48,7 +48,7 @@ from diffusers.utils.import_utils import is_xformers_available
 
 import discriminator, trainer_util
 from discriminator import Discriminator2D
-from trainer_util import get_discriminator_input, log_grad_norm
+from trainer_util import *
 
 if is_wandb_available():
     import wandb
@@ -920,8 +920,7 @@ def main():
                 discriminator.requires_grad_(True)
 
                 # Train discriminator
-                discriminator_input = get_discriminator_input(
-                    discriminator=discriminator,
+                discriminator_input = discriminator.get_input(
                     noise_scheduler=noise_scheduler,
                     noisy_latents=noisy_latents,
                     model_pred=torch.cat((target, model_pred), 0),
@@ -949,8 +948,7 @@ def main():
                 mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # Compute GAN loss
-                discriminator_input = get_discriminator_input(
-                    discriminator=discriminator,
+                discriminator_input = discriminator.get_input(
                     noise_scheduler=noise_scheduler,
                     noisy_latents=noisy_latents,
                     model_pred=model_pred,

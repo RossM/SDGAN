@@ -4,10 +4,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import einops, einops.layers.torch
 import diffusers
+from diffusers import DDPMScheduler
 from diffusers.models.embeddings import get_timestep_embedding
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.configuration_utils import ConfigMixin, register_to_config
+from torch import Tensor
 from typing import Tuple, Optional
+from trainer_util import *
 
 def Downsample(dim, dim_out):
     return nn.Conv2d(dim, dim_out, 4, 2, 1)
@@ -218,3 +221,46 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             d = torch.cat([d, x_mean], dim=-1)
         return self.to_out(d) + 0.5
 
+    def get_input(
+        self,
+        noise_scheduler: DDPMScheduler,
+        noisy_latents: Tensor,
+        model_pred: Tensor,
+        timesteps: Tensor,
+        noise: Tensor,
+    ):
+        # Discriminator training combines positive and negative model_pred into a single batch, so repeat
+        # the other arguments until they're the right batch size
+        noisy_latents = batch_repeat(noisy_latents, model_pred.shape[0] // noisy_latents.shape[0])
+        timesteps = batch_repeat(timesteps, model_pred.shape[0] // timesteps.shape[0])
+        noise = batch_repeat(noise, model_pred.shape[0] // noise.shape[0])
+        
+        if self.config.prediction_type == "target":
+            # In target mode, the discriminator predicts directly from the unet output
+            discriminator_input = model_pred
+        else:
+            predicted_latents = get_predicted_latents(noisy_latents, model_pred, timesteps, noise_scheduler)
+
+            if self.config.step_type == "relative":
+                next_timesteps = torch.clamp(timesteps + self.config.step_offset, min=0, max=noise_scheduler.config.num_train_timesteps-1)
+            elif self.config.step_type == "absolute":
+                next_timesteps = torch.full_like(timesteps, self.config.step_offset)
+            else:
+                raise ValueError(f"Unknown step type {self.config.step_type}")
+
+            if self.config.prediction_type == "step":
+                # In step mode, the discriminator gets the simulated result of stepping the denoising process several steps.
+                discriminator_input = noise_scheduler.add_noise(predicted_latents, noise, next_timesteps)
+            elif self.config.prediction_type == "noisy_step":
+                # In noisy step mode, we take the predicted denoised latents and add new noise
+                # This helps regularize the self. See https://arxiv.org/abs/2206.02262
+                discriminator_input = noise_scheduler.add_noise(predicted_latents, torch.randn_like(predicted_latents), next_timesteps)
+            else:
+                raise ValueError(f"Unknown prediction type {self.config.prediction_type}")
+            
+        if self.config.in_channels > discriminator_input.shape[1]:
+            # Some discriminator modes get both the unet input and output
+            discriminator_input = torch.cat((noisy_latents, discriminator_input), 1)
+
+        return discriminator_input
+        
