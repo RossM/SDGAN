@@ -122,6 +122,9 @@ class AdaptiveReduce(nn.Module):
         weight = F.softmax(self.a * x, dim=-1)
         return torch.sum(x * weight, dim=-1)
         
+    def extra_repr(self):
+        return f"{self.dim}"
+        
 class Discriminator2D(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
