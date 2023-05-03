@@ -142,11 +142,14 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         reduction_type: str = "MeanMaxReduce",
         prediction_type: str = "target",
         step_offset: int = 0,
+        step_type: str = "relative",
     ):
         super().__init__()
         
         if prediction_type != "target" and prediction_type != "step" and prediction_type != "noisy_step":
             raise ValueError(f"Unknown prediction type {prediction_type}")
+        if step_type != "relative" and step_type != "absolute":
+            raise ValueError(f"Unknown step type {step_type}")
         
         self.blocks = nn.ModuleList([])
         self.block_means = nn.ModuleList([])
