@@ -38,5 +38,5 @@
   "reduction_type": "AdaptiveReduce",
   "prediction_type": "noisy_step",
   "step_type": "absolute",
-  "step_offset": 25
+  "step_offset": 250
 }
