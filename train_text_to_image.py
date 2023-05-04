@@ -932,14 +932,17 @@ def main():
                 discriminator_pred = discriminator(discriminator_input, timesteps.repeat(2), encoder_hidden_states.repeat(2, 1, 1))
                 discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
                 discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
-                accelerator.backward(discriminator_loss)
-                if global_step % 10 == 0:
-                    log_grad_norm("discriminator", discriminator, accelerator, global_step)
-                if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
-                optimizer_discriminator.step()
+                if discriminator_loss >= 0.1:
+                    # If discriminator loss goes too low, training may be collapsing. Freeze the discriminator to
+                    # allow the generator to catch up.
+                    accelerator.backward(discriminator_loss)
+                    if global_step % 10 == 0:
+                        log_grad_norm("discriminator", discriminator, accelerator, global_step)
+                    if accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
+                    optimizer_discriminator.step()
+                    optimizer_discriminator.zero_grad()
                 lr_scheduler_discriminator.step()
-                optimizer_discriminator.zero_grad()
                 del discriminator_input, discriminator_pred, discriminator_target
                 discriminator_loss.detach_()
                 
