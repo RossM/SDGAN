@@ -825,6 +825,7 @@ def main():
     if accelerator.is_main_process:
         tracker_config = dict(vars(args))
         tracker_config.pop("validation_prompts")
+        tracker_config["discriminator_config_data"] = discriminator.config
         accelerator.init_trackers(args.tracker_project_name, tracker_config)
 
     # Train!
