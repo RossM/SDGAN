@@ -953,12 +953,13 @@ def main():
                 mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                 # Compute GAN loss
-                discriminator_input = discriminator.get_input(
-                    noise_scheduler=noise_scheduler,
-                    noisy_latents=noisy_latents,
-                    model_pred=model_pred,
-                    timesteps=timesteps,
-                    noise=noise,
+                discriminator_input = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
+                    discriminator,
+                    noise_scheduler,
+                    noisy_latents,
+                    model_pred,
+                    timesteps,
+                    noise,
                 )
                 discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
                 gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
