@@ -11,6 +11,7 @@ TODO
 
 BIBLIOGRAPHY (incomplete)
 * [High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752)
+* [Image-to-Image Translation with Conditional Adversarial Networks](https://arxiv.org/abs/1611.07004)
 * [Diffusion-GAN: Training GANs with Diffusion](https://arxiv.org/abs/2206.02262)
 * [Scaling up GANs for Text-to-Image Synthesis](https://arxiv.org/abs/2303.05511)
 * [Fast Transformer Decoding: One Write-Head is All You Need](https://arxiv.org/abs/1911.02150)
