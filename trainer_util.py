@@ -7,6 +7,12 @@ from diffusers import DDPMScheduler
 from torch import Tensor
 from torch.nn import Module
 
+def unsqueeze_like(x: Tensor, target: Tensor):
+    x = x.flatten()
+    while len(x.shape) < len(target.shape):
+        x = x.unsqueeze(-1)
+    return x
+
 def get_predicted_latents(
         noisy_latents: Tensor, 
         model_pred: Tensor, 
@@ -23,14 +29,10 @@ def get_predicted_latents(
     alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
     
     sqrt_alpha_prod = alphas_cumprod[timesteps] ** 0.5
-    sqrt_alpha_prod = sqrt_alpha_prod.flatten()
-    while len(sqrt_alpha_prod.shape) < len(noisy_latents.shape):
-        sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
+    sqrt_alpha_prod = unsqueeze_like(sqrt_alpha_prod, noisy_latents)
         
     sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
-    sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.flatten()
-    while len(sqrt_one_minus_alpha_prod.shape) < len(noisy_latents.shape):
-        sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
+    sqrt_one_minus_alpha_prod = unsqueeze_like(sqrt_one_minus_alpha_prod, noisy_latents)
     
     if noise_scheduler.config.prediction_type == "epsilon":
         predicted_latents = (noisy_latents - sqrt_one_minus_alpha_prod * model_pred) / sqrt_alpha_prod

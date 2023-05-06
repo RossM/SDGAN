@@ -250,7 +250,14 @@ class Discriminator2D(ModelMixin, ConfigMixin):
 
             if self.config.prediction_type == "step":
                 # In step mode, the discriminator gets the simulated result of stepping the denoising process several steps.
-                discriminator_input = noise_scheduler.add_noise(predicted_latents, noise, next_timesteps)
+                # We adjust the noise distribution based on the formula for P(q=x|q+r=z) where q,r are the noise distributions 
+                # for [0, next_timesteps) and [next_timesteps, timesteps) respectively, and z is the already-drawn total noise.
+                alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
+                betas_cumprod = 1 - alphas_cumprod
+                betas_ratio = betas_cumprod[next_timesteps] / betas_cumprod[timesteps]
+                betas_ratio = unsqueeze_like(betas_ratio, noisy_latents)
+                adjusted_noise = ((1 - betas_ratio) ** 0.5) * torch.randn_like(predicted_latents) + (betas_ratio ** 0.5) * noise
+                discriminator_input = noise_scheduler.add_noise(predicted_latents, adjusted_noise, next_timesteps)
             elif self.config.prediction_type == "noisy_step":
                 # In noisy step mode, we take the predicted denoised latents and add new noise
                 # This helps regularize the self. See https://arxiv.org/abs/2206.02262
