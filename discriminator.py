@@ -176,7 +176,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         mlp_hidden_channels: Tuple[int] = (2048, 2048, 2048),
         mlp_uses_norm: bool = True,
         attention_dim: Optional[int] = None,
-        attention_heads: list[int] = 8,
+        attention_heads: Tuple[int] = (0, 0, 8, 8),
         groups: int = 32,
         embedding_dim: int = 768,
         time_embedding_dim: int = 128,
