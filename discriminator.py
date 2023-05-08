@@ -296,7 +296,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
                 discriminator_input = noise_scheduler.add_noise(predicted_latents, adjusted_noise, next_timesteps)
             elif self.config.prediction_type == "noisy_step":
                 # In noisy step mode, we take the predicted denoised latents and add new noise
-                # This helps regularize the self. See https://arxiv.org/abs/2206.02262
+                # This helps regularize the discriminator. See https://arxiv.org/abs/2206.02262
                 discriminator_input = noise_scheduler.add_noise(predicted_latents, torch.randn_like(predicted_latents), next_timesteps)
             else:
                 raise ValueError(f"Unknown prediction type {self.config.prediction_type}")
