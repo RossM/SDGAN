@@ -250,9 +250,9 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             d = torch.zeros([x.shape[0], 0], device=x.device, dtype=x.dtype)
         for (block, block_mean) in zip(self.blocks, self.block_means):
             if self.gradient_checkpointing:
-                x = torch.utils.checkpoint.checkpoint(block, x, time_embed)
+                x = torch.utils.checkpoint.checkpoint(block, x, time_embed, encoder_hidden_states)
             else:
-                x = block(x, time_embed)
+                x = block(x, time_embed, encoder_hidden_states)
             x_mean = block_mean(x)
             d = torch.cat([d, x_mean], dim=-1)
         return self.to_out(d) + 0.5
