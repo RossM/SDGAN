@@ -1,6 +1,10 @@
 {
   "_class_name": "Discriminator2D",
   "_diffusers_version": "0.15.0.dev0",
+  "attention_blocks": [
+    2,
+    3
+  ],
   "attention_heads": [
     0,
     0,
@@ -25,7 +29,8 @@
     1,
     2
   ],
-  "embedding_dim": 768,
+  "embedding_dim": 1024,
+  "combined_attention": true,
   "groups": 32,
   "in_channels": 4,
   "mlp_hidden_channels": [
@@ -36,8 +41,8 @@
   "mlp_uses_norm": true,
   "out_channels": 1,
   "time_embedding_dim": 128,
-  "reduction_type": "AdaptiveReduce",
-  "prediction_type": "noisy_step",
+  "reduction_type": "MeanReduce",
+  "prediction_type": "step",
   "step_type": "relative",
-  "step_offset": 0
+  "step_offset": -250
 }

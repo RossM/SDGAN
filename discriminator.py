@@ -15,28 +15,41 @@ from trainer_util import *
 def Downsample(dim, dim_out):
     return nn.Conv2d(dim, dim_out, 4, 2, 1)
 
-class Residual(nn.Sequential):
-    def forward(self, input):
-        x = input
-        for module in self:
-            x = module(x)
-        return x + input
+class Conv2dLayer(nn.Module):
+    def __init__(self, dim, dim_out, *, kernel_size=3, groups=32, bias=True):
+        super().__init__()
+        self.norm = nn.GroupNorm(groups, dim)
+        self.activation = nn.SiLU()
+        self.conv = nn.Conv2d(dim, dim_out, kernel_size=kernel_size, padding=kernel_size//2, bias=bias)
+    
+    def forward(self, x):
+        x = self.norm(x)
+        x = self.activation(x)
+        x = self.conv(x)
+        return x
 
-def ConvLayer(dim, dim_out, *, kernel_size=3, groups=32, bias=True):
-    return nn.Sequential(
-        nn.GroupNorm(groups, dim),
-        nn.SiLU(),
-        nn.Conv2d(dim, dim_out, kernel_size=kernel_size, padding=kernel_size//2, bias=bias),
-    )
+class MLPLayer(nn.Module):
+    def __init__(self, dim, dim_out, *, groups=32, bias=True, norm=True):
+        super().__init__()
+        self.norm = nn.GroupNorm(groups, dim) if norm else None
+        self.activation = nn.SiLU()
+        self.conv = nn.Linear(dim, dim_out, bias=bias)
+    
+    def forward(self, x):
+        if self.norm != None:
+            x = self.norm(x)
+        x = self.activation(x)
+        x = self.conv(x)
+        return x
 
 class ResnetBlock(nn.Module):
     def __init__(self, dim, *, kernel_size=3, groups=32, time_embedding_dim=128):
         super().__init__()
-        self.conv_in = ConvLayer(dim, dim, kernel_size=kernel_size, groups=groups)
-        self.conv_out = ConvLayer(dim, dim, kernel_size=kernel_size, groups=groups, bias=False)
+        self.conv_in = Conv2dLayer(dim, dim, kernel_size=kernel_size, groups=groups)
+        self.conv_out = Conv2dLayer(dim, dim, kernel_size=kernel_size, groups=groups, bias=False)
         
-        nn.init.zeros_(self.conv_out[2].weight)
-        #nn.init.zeros_(self.conv_out[2].bias)
+        nn.init.zeros_(self.conv_out.conv.weight)
+        #nn.init.zeros_(self.conv_out.conv.bias)
         
         if time_embedding_dim > 0:
             self.embed_in = nn.Linear(time_embedding_dim, dim, bias=False)
@@ -51,17 +64,8 @@ class ResnetBlock(nn.Module):
         x = self.conv_out(x)
         return x + input
 
-class SequentialWithTimestep(nn.Sequential):
-    def forward(self, x, time_embed):
-        for module in self:
-            if isinstance(module, ResnetBlock):
-                x = module(x, time_embed)
-            else:
-                x = module(x)
-        return x
-
-class SelfAttention(nn.Module):
-    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32, bias=True):
+class CombinedAttention(nn.Module):
+    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32, bias=True, cond_embedding_dim=None):
         super().__init__()
         self.dim = dim
         self.out_dim = dim
@@ -73,19 +77,30 @@ class SelfAttention(nn.Module):
         self.to_q = nn.Linear(dim, key_dim * heads)
         self.to_out = nn.Linear(value_dim * heads, out_dim, bias=bias)
         
+        if cond_embedding_dim:
+            self.embed_to_k = nn.Linear(cond_embedding_dim, key_dim)
+            self.embed_to_v = nn.Linear(cond_embedding_dim, value_dim)
+        else:
+            self.embed_to_k = self.embed_to_v = None
+        
         nn.init.zeros_(self.to_out.weight)
         if bias:
             nn.init.zeros_(self.to_out.bias)
         
         self.use_efficient_attention = hasattr(F, "scaled_dot_product_attention")
 
-    def forward(self, x):
+    def forward(self, x, cond_embed = None):
         shape = x.shape
         x = einops.rearrange(x, 'b c ... -> b (...) c')
 
         k = self.to_k(x)
         v = self.to_v(x)
         q = self.to_q(x)
+        
+        if self.embed_to_k != None:
+            k = torch.cat([k, self.embed_to_k(cond_embed)], dim=1)
+            v = torch.cat([v, self.embed_to_v(cond_embed)], dim=1)
+        
         q = einops.rearrange(q, 'b n (h c) -> b (n h) c', h=self.heads)
         if self.use_efficient_attention:
             result = F.scaled_dot_product_attention(q, k, v)
@@ -100,13 +115,31 @@ class SelfAttention(nn.Module):
         out = torch.reshape(out, (shape[0], self.out_dim, *shape[2:]))
         return out
 
-def SelfAttentionBlock(dim, attention_dim, *, heads=8, groups=32):
-    if not attention_dim:
-        attention_dim = dim // heads
-    return Residual(
-        nn.GroupNorm(groups, dim),
-        SelfAttention(dim, dim, heads=heads, key_dim=attention_dim, value_dim=attention_dim, bias=False),
-    )
+class CombinedAttentionBlock(nn.Module):
+    def __init__(self, dim, attention_dim, *, heads=8, groups=32, cond_embedding_dim=None):
+        super().__init__()
+        
+        if not attention_dim:
+            attention_dim = dim // heads
+
+        self.norm = nn.GroupNorm(groups, dim)
+        self.attention = CombinedAttention(dim, dim, heads=heads, key_dim=attention_dim, value_dim=attention_dim, bias=False, cond_embedding_dim=cond_embedding_dim)
+
+    def forward(self, input, cond_embed):
+        x = self.norm(input)
+        x = self.attention(x, cond_embed)
+        return x + input
+
+class SequentialWithEmbeddings(nn.Sequential):
+    def forward(self, x, time_embed, cond_embed):
+        for module in self:
+            if isinstance(module, ResnetBlock):
+                x = module(x, time_embed)
+            elif isinstance(module, CombinedAttentionBlock):
+                x = module(x, cond_embed)
+            else:
+                x = module(x)
+        return x
 
 class AdaptiveReduce(nn.Module):
     """
@@ -128,6 +161,9 @@ class AdaptiveReduce(nn.Module):
     def extra_repr(self):
         return f"{self.dim}"
         
+def MeanReduce():
+    return einops.layers.torch.Reduce('b c ... -> b c', 'mean')
+        
 class Discriminator2D(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
@@ -137,11 +173,10 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         block_out_channels: Tuple[int] = (128, 256, 512, 1024, 1024, 1024),
         block_repeats: Tuple[int] = (2, 2, 2, 2, 2),
         downsample_blocks: Tuple[int] = (0, 1, 2),
-        attention_blocks: Tuple[int] = (1, 2, 3, 4),
         mlp_hidden_channels: Tuple[int] = (2048, 2048, 2048),
         mlp_uses_norm: bool = True,
         attention_dim: Optional[int] = None,
-        attention_heads: int = 8,
+        attention_heads: list[int] = 8,
         groups: int = 32,
         embedding_dim: int = 768,
         time_embedding_dim: int = 128,
@@ -149,6 +184,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         prediction_type: str = "target",
         step_offset: int = 0,
         step_type: str = "relative",
+        combined_attention: bool = False,
     ):
         super().__init__()
         
@@ -165,10 +201,12 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         for i in range(0, len(block_out_channels) - 1):
             block_in = block_out_channels[i]
             block_out = block_out_channels[i + 1]
-            block = SequentialWithTimestep()
+            block = SequentialWithEmbeddings()
             for j in range(0, block_repeats[i]):
-                if i in attention_blocks:
-                    block.append(SelfAttentionBlock(block_in, attention_dim, heads=attention_heads, groups=groups))
+                if attention_heads[i] > 0:
+                    block.append(CombinedAttentionBlock(
+                        block_in, attention_dim, heads=attention_heads[i], groups=groups, cond_embedding_dim=embedding_dim if combined_attention else 0
+                    ))
                 block.append(ResnetBlock(block_in, groups=groups, time_embedding_dim=time_embedding_dim))
             if i in downsample_blocks:
                 block.append(Downsample(block_in, block_out))
@@ -177,24 +215,22 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             self.blocks.append(block)
             if reduction_type == "AdaptiveReduce":
                 self.block_means.append(AdaptiveReduce(block_out))
+            elif reduction_type == "MeanReduce":
+                self.block_means.append(MeanReduce())
             else:
                 raise ValueError(f"Unknown reduction type {reduction_type}")
 
         # A simple MLP to make the final decision based on statistics from
         # the output of every block
         self.to_out = nn.Sequential()
-        if reduction_type == "MeanMaxReduce":
-            d_channels = 2 * sum(block_out_channels[1:]) + embedding_dim
-        else:
-            d_channels = sum(block_out_channels[1:]) + embedding_dim
-        for c in mlp_hidden_channels:
-            self.to_out.append(nn.Linear(d_channels, c, bias=not mlp_uses_norm))
-            if mlp_uses_norm:
-                self.to_out.append(nn.GroupNorm(groups, c))
-            self.to_out.append(nn.SiLU())
-            d_channels = c
-        final_layer = nn.Linear(d_channels, out_channels)
-        nn.init.zeros_(final_layer.bias)
+        d_channels = sum(block_out_channels[1:]) + embedding_dim
+        self.to_out.append(nn.Linear(d_channels, mlp_hidden_channels[0], bias=not mlp_uses_norm))
+        for i in range(0, len(mlp_hidden_channels) - 1):
+            mlp_in = mlp_hidden_channels[i]
+            mlp_out = mlp_hidden_channels[i + 1]
+            self.to_out.append(MLPLayer(mlp_in, mlp_out, bias=not mlp_uses_norm, norm=mlp_uses_norm))
+        final_layer = MLPLayer(mlp_hidden_channels[-1], out_channels, bias=True, norm=mlp_uses_norm)
+        nn.init.zeros_(final_layer.conv.bias)
         self.to_out.append(final_layer)
         
         self.gradient_checkpointing = False
