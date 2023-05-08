@@ -1,13 +1,12 @@
 {
   "_class_name": "Discriminator2D",
   "_diffusers_version": "0.15.0.dev0",
-  "attention_blocks": [
+  "attention_heads": [
     0,
-    1,
-    2,
-    3
+    0,
+    8,
+    8
   ],
-  "attention_heads": 8,
   "block_out_channels": [
     128,
     256,
@@ -26,13 +25,13 @@
     1,
     2
   ],
-  "embedding_dim": 768,
+  "embedding_dim": 1024,
   "groups": 32,
   "in_channels": 4,
   "mlp_hidden_channels": [
     2048,
     2048,
-    1024
+    2048
   ],
   "mlp_uses_norm": true,
   "out_channels": 1,

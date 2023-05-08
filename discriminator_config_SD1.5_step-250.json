@@ -5,7 +5,12 @@
     2,
     3
   ],
-  "attention_heads": 8,
+  "attention_heads": [
+    0,
+    0,
+    8,
+    8
+  ],
   "block_out_channels": [
     128,
     256,
