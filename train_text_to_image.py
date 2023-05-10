@@ -1002,7 +1002,7 @@ def main():
                 optimizer.zero_grad()
                     
                 lr_scheduler.step()
-                del model_pred
+                del model_pred, loss
                 mse_loss.detach_()
                 gan_loss.detach_()
 
