@@ -412,7 +412,7 @@ def parse_args():
     parser.add_argument(
         "--stabilize_g", 
         type=float, 
-        default=0.0, 
+        default=0.2, 
         required=False, 
         help="Loss threshold below which generator training will be frozen to allow the discriminator to catch up"
     )
@@ -986,7 +986,7 @@ def main():
                     # Compute total loss
                     # If GAN loss starts getting too high, the GAN training may be collapsing. Reduce the
                     # influence of the GAN to allow training to stabilize
-                    loss = mse_loss + args.gan_weight * gan_loss * (1 if gan_loss < 0.5 else 0.1)
+                    loss = mse_loss + args.gan_weight * gan_loss
 
                     # Gather the losses across all processes for logging (if we use distributed training).
                     #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
