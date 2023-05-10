@@ -1,10 +1,6 @@
 {
   "_class_name": "Discriminator2D",
   "_diffusers_version": "0.15.0.dev0",
-  "attention_blocks": [
-    2,
-    3
-  ],
   "attention_heads": [
     0,
     0,
