@@ -299,8 +299,8 @@ def parse_args():
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
+    parser.add_argument("--adam_beta1", type=float, default=0.8, help="The beta1 parameter for the Adam optimizer.")
+    parser.add_argument("--adam_beta2", type=float, default=0.99, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
