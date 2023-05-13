@@ -63,9 +63,35 @@ class ResnetBlock(nn.Module):
             x = x + einops.rearrange(self.embed_in(time_embed), 'b c -> b c 1 1')
         x = self.conv_out(x)
         return x + input
+        
+class GroupedLinear(nn.Module):
+    def __init__(self, in_features, out_features, groups, bias=True, device=None, dtype=None):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.groups = groups
+        
+        self.weight = nn.Parameter(torch.empty(groups, in_features // groups, out_features // groups, device=device, dtype=dtype))
+        nn.init.uniform_(self.weight, -(in_features ** -0.5), (in_features ** -0.5))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features, device=device, dtype=dtype))
+            nn.init.uniform_(self.bias, -(in_features ** -0.5), (in_features ** -0.5))
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        x = einops.rearrange(x, 'b (g i) -> b g i', g=self.groups)
+        x = torch.einsum('b g i, g i o -> b g o', x, self.weight)
+        x = einops.rearrange(x, 'b g o -> b (g o)')
+        if self.bias != None:
+            x = x + self.bias.unsqueeze(0)
+        return x
+        
+    def extra_repr(self):
+        return f"{self.in_features}, {self.out_features}, {self.groups}"
 
 class CombinedAttention(nn.Module):
-    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32, bias=True, cond_embedding_dim=None):
+    def __init__(self, dim, out_dim, *, heads=8, key_dim=32, value_dim=32, bias=True, cond_embedding_dim=None, grouped=False):
         super().__init__()
         self.dim = dim
         self.out_dim = dim
@@ -74,7 +100,10 @@ class CombinedAttention(nn.Module):
 
         self.to_k = nn.Linear(dim, key_dim)
         self.to_v = nn.Linear(dim, value_dim)
-        self.to_q = nn.Linear(dim, key_dim * heads)
+        if grouped:
+            self.to_q = GroupedLinear(dim, key_dim * heads, heads)
+        else:
+            self.to_q = nn.Linear(dim, key_dim * heads)
         self.to_out = nn.Linear(value_dim * heads, out_dim, bias=bias)
         
         if cond_embedding_dim:
@@ -116,14 +145,23 @@ class CombinedAttention(nn.Module):
         return out
 
 class CombinedAttentionBlock(nn.Module):
-    def __init__(self, dim, attention_dim, *, heads=8, groups=32, cond_embedding_dim=None, v_mult=1, qk_mult=1):
+    def __init__(self, dim, attention_dim, *, heads=8, groups=32, cond_embedding_dim=None, v_mult=1, qk_mult=1, grouped=False):
         super().__init__()
         
         if not attention_dim:
             attention_dim = dim // heads
 
         self.norm = nn.GroupNorm(groups, dim)
-        self.attention = CombinedAttention(dim, dim, heads=heads, key_dim=attention_dim * qk_mult, value_dim=attention_dim * v_mult, bias=False, cond_embedding_dim=cond_embedding_dim)
+        self.attention = CombinedAttention(
+            dim, 
+            dim, 
+            heads=heads, 
+            key_dim=attention_dim * qk_mult, 
+            value_dim=attention_dim * v_mult, 
+            bias=False, 
+            cond_embedding_dim=cond_embedding_dim,
+            grouped=grouped,
+        )
 
     def forward(self, input, cond_embed):
         x = self.norm(input)
@@ -185,6 +223,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         step_offset: int = 0,
         step_type: str = "relative",
         combined_attention: bool = False,
+        grouped_attention: bool = False,
         v_mult: int = 1,
         qk_mult: int = 1,
     ):
@@ -214,6 +253,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
                         cond_embedding_dim=embedding_dim if combined_attention else 0,
                         v_mult=v_mult,
                         qk_mult=qk_mult,
+                        grouped=grouped_attention,
                     ))
                 block.append(ResnetBlock(block_in, groups=groups, time_embedding_dim=time_embedding_dim))
             if i in downsample_blocks:
