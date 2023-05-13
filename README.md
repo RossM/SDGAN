@@ -7,7 +7,7 @@ TODO
 * ☐ Investigate using different samples for generator and discriminator training
 * ☑ ~~Test the effect of adding self-attention to all layers~~ Failed due to CUDA running out of memory
 * ☐ Test the effect of different parameter initializations
-* ☐ Investigate using cross attention
+* ☑ Investigate using cross attention
 
 BIBLIOGRAPHY (incomplete)
 * [High-Resolution Image Synthesis with Latent Diffusion Models](https://arxiv.org/abs/2112.10752)
