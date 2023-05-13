@@ -116,14 +116,14 @@ class CombinedAttention(nn.Module):
         return out
 
 class CombinedAttentionBlock(nn.Module):
-    def __init__(self, dim, attention_dim, *, heads=8, groups=32, cond_embedding_dim=None):
+    def __init__(self, dim, attention_dim, *, heads=8, groups=32, cond_embedding_dim=None, v_mult=1, qk_mult=1):
         super().__init__()
         
         if not attention_dim:
             attention_dim = dim // heads
 
         self.norm = nn.GroupNorm(groups, dim)
-        self.attention = CombinedAttention(dim, dim, heads=heads, key_dim=attention_dim, value_dim=attention_dim, bias=False, cond_embedding_dim=cond_embedding_dim)
+        self.attention = CombinedAttention(dim, dim, heads=heads, key_dim=attention_dim * qk_mult, value_dim=attention_dim * v_mult, bias=False, cond_embedding_dim=cond_embedding_dim)
 
     def forward(self, input, cond_embed):
         x = self.norm(input)
@@ -185,6 +185,8 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         step_offset: int = 0,
         step_type: str = "relative",
         combined_attention: bool = False,
+        v_mult: int = 1,
+        qk_mult: int = 1,
     ):
         super().__init__()
         
@@ -205,7 +207,13 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             for j in range(0, block_repeats[i]):
                 if attention_heads[i] > 0:
                     block.append(CombinedAttentionBlock(
-                        block_in, attention_dim, heads=attention_heads[i], groups=groups, cond_embedding_dim=embedding_dim if combined_attention else 0
+                        block_in, 
+                        attention_dim, 
+                        heads=attention_heads[i], 
+                        groups=groups, 
+                        cond_embedding_dim=embedding_dim if combined_attention else 0,
+                        v_mult=v_mult,
+                        qk_mult=qk_mult,
                     ))
                 block.append(ResnetBlock(block_in, groups=groups, time_embedding_dim=time_embedding_dim))
             if i in downsample_blocks:
