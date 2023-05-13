@@ -80,11 +80,14 @@ class GroupedLinear(nn.Module):
             self.bias = None
 
     def forward(self, x):
-        x = einops.rearrange(x, 'b (g i) -> b g i', g=self.groups)
-        x = torch.einsum('b g i, g i o -> b g o', x, self.weight)
-        x = einops.rearrange(x, 'b g o -> b (g o)')
+        x = einops.rearrange(x, '... (g i) -> ... g i', g=self.groups)
+        x = torch.einsum('... g i, g i o -> ... g o', x, self.weight)
+        x = einops.rearrange(x, '... g o -> ... (g o)')
         if self.bias != None:
-            x = x + self.bias.unsqueeze(0)
+            bias = self.bias
+            while len(bias.shape) < len(x.shape):
+                bias = bias.unsqueeze(0)
+            x = x + bias
         return x
         
     def extra_repr(self):
