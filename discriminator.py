@@ -147,11 +147,11 @@ class AdaptiveReduce(nn.Module):
     channel that blends between max-like, mean, and min-like reduction.
     """
 
-    def __init__(self, dim):
+    def __init__(self, dim, init_scale=0):
         super().__init__()
         self.dim = dim
         
-        self.a = nn.Parameter(torch.zeros(1, dim, 1))
+        self.a = nn.Parameter(init_scale * torch.randn(1, dim, 1))
     
     def forward(self, x):
         x = einops.rearrange(x, 'b c ... -> b c (...)')
@@ -180,7 +180,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         groups: int = 32,
         embedding_dim: int = 768,
         time_embedding_dim: int = 128,
-        reduction_type: str = "MeanMaxReduce",
+        reduction_type: str = "MeanReduce",
         prediction_type: str = "target",
         step_offset: int = 0,
         step_type: str = "relative",
@@ -223,6 +223,8 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             self.blocks.append(block)
             if reduction_type == "AdaptiveReduce":
                 self.block_means.append(AdaptiveReduce(block_out))
+            elif reduction_type == "AdaptiveReduceN":
+                self.block_means.append(AdaptiveReduce(block_out, init_scale=1))
             elif reduction_type == "MeanReduce":
                 self.block_means.append(MeanReduce())
             else:
