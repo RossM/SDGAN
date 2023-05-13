@@ -71,11 +71,13 @@ class GroupedLinear(nn.Module):
         self.out_features = out_features
         self.groups = groups
         
+        init_scale = (in_features // groups) ** -0.5
+        
         self.weight = nn.Parameter(torch.empty(groups, in_features // groups, out_features // groups, device=device, dtype=dtype))
-        nn.init.uniform_(self.weight, -(in_features ** -0.5), (in_features ** -0.5))
+        nn.init.uniform_(self.weight, -init_scale, init_scale)
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, device=device, dtype=dtype))
-            nn.init.uniform_(self.bias, -(in_features ** -0.5), (in_features ** -0.5))
+            nn.init.uniform_(self.bias, -init_scale, init_scale)
         else:
             self.bias = None
 
