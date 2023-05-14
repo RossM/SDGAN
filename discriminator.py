@@ -269,7 +269,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             if reduction_type == "AdaptiveReduce":
                 self.block_means.append(AdaptiveReduce(block_out))
             elif reduction_type == "AdaptiveReduceN":
-                self.block_means.append(AdaptiveReduce(block_out, init_scale=1))
+                self.block_means.append(AdaptiveReduce(block_out, init_scale=2/3))
             elif reduction_type == "MeanReduce":
                 self.block_means.append(MeanReduce())
             else:
