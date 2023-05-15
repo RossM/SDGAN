@@ -951,11 +951,11 @@ def main():
                 # allow the generator to catch up.
                 if discriminator_loss >= args.stabilize_d:
                     accelerator.backward(discriminator_loss)
-                    if global_step % 10 == 0:
-                        log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     if accelerator.sync_gradients:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                     optimizer_discriminator.step()
+                    if global_step % 10 == 0:
+                        log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
                 lr_scheduler_discriminator.step()
                 del discriminator_input, discriminator_pred, discriminator_target
@@ -994,11 +994,11 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                if global_step % 10 == 0:
-                    log_grad_norm("unet", unet, accelerator, global_step)
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()
+                if global_step % 10 == 0:
+                    log_grad_norm("unet", unet, accelerator, global_step)
                 optimizer.zero_grad()
                     
                 lr_scheduler.step()
