@@ -29,7 +29,6 @@
   "combined_attention": true,
   "grouped_attention": true,
   "v_mult": 2,
-  "kv_mult": 2,
   "groups": 32,
   "in_channels": 4,
   "mlp_hidden_channels": [
