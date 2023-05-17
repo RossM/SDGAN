@@ -3,16 +3,16 @@
   "_diffusers_version": "0.15.0.dev0",
   "attention_heads": [
     0,
-    0,
+    8,
     8,
     8
   ],
   "block_out_channels": [
-    128,
-    256,
-    512,
-    1024,
-    1024
+    192,
+    384,
+    768,
+    1536,
+    1536
   ],
   "block_repeats": [
     4,
@@ -25,7 +25,8 @@
     1,
     2
   ],
-  "embedding_dim": 768,
+  "embedding_dim": 1024,
+  "combined_attention": true,
   "groups": 32,
   "in_channels": 4,
   "mlp_hidden_channels": [
@@ -36,8 +37,9 @@
   "mlp_uses_norm": true,
   "out_channels": 1,
   "time_embedding_dim": 128,
-  "reduction_type": "AdaptiveReduce",
-  "prediction_type": "noisy_step",
+  "reduction_type": "AdaptiveReduceN",
+  "prediction_type": "step",
   "step_type": "relative",
-  "step_offset": 0
+  "step_offset": -250,
+  "v_mult": 4
 }
