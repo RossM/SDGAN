@@ -231,6 +231,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         grouped_attention: bool = False,
         v_mult: int = 1,
         qk_mult: int = 1,
+        output_convolution: bool = False,
     ):
         super().__init__()
         
@@ -263,6 +264,8 @@ class Discriminator2D(ModelMixin, ConfigMixin):
                 block.append(ResnetBlock(block_in, groups=groups, time_embedding_dim=time_embedding_dim))
             if i in downsample_blocks:
                 block.append(Downsample(block_in, block_out))
+            elif output_convolution:
+                block.append(nn.Conv2d(block_in, block_out, 3, padding=1))
             elif block_in != block_out:
                 block.append(nn.Conv2d(block_in, block_out, 1))
             self.blocks.append(block)
