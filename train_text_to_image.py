@@ -1048,7 +1048,7 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                if accelerator.sync_gradients and not args.use_lion and not args.use_scram::
+                if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()
                 if global_step % 10 == 0:
