@@ -38,6 +38,7 @@ from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
+from lion_pytorch import Lion
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
@@ -271,6 +272,9 @@ def parse_args():
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
+    )
+    parser.add_argument(
+        "--use_lion", action="store_true", help="Whether or not to use LION optimizer."
     )
     parser.add_argument(
         "--allow_tf32",
@@ -619,23 +623,51 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+    elif args.use_lion:
+        optimizer_cls = Lion
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+        )        
     else:
         optimizer_cls = torch.optim.AdamW
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
 
-    optimizer = optimizer_cls(
-        unet.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
-    optimizer_discriminator = optimizer_cls(
-        discriminator.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
@@ -951,7 +983,7 @@ def main():
                 # allow the generator to catch up.
                 if discriminator_loss >= args.stabilize_d:
                     accelerator.backward(discriminator_loss)
-                    if accelerator.sync_gradients:
+                    if accelerator.sync_gradients and not args.use_lion:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                     optimizer_discriminator.step()
                     if global_step % 10 == 0:
@@ -994,7 +1026,7 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                if accelerator.sync_gradients:
+                if accelerator.sync_gradients and not args.use_lion:
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()
                 if global_step % 10 == 0:

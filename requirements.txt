@@ -3,6 +3,7 @@ datasets
 diffusers>=0.15.0
 einops
 huggingface_hub
+lion-pytorch
 numpy
 packaging
 torch
