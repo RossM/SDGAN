@@ -623,25 +623,51 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
     elif args.use_lion:
         optimizer_cls = Lion
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+        )        
     else:
         optimizer_cls = torch.optim.AdamW
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
 
-    optimizer = optimizer_cls(
-        unet.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
-    optimizer_discriminator = optimizer_cls(
-        discriminator.parameters(),
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
