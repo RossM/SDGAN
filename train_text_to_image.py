@@ -38,6 +38,7 @@ from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
+from lion_pytorch import Lion
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
@@ -271,6 +272,9 @@ def parse_args():
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
+    )
+    parser.add_argument(
+        "--use_lion", action="store_true", help="Whether or not to use LION optimizer."
     )
     parser.add_argument(
         "--allow_tf32",
@@ -619,6 +623,8 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
+    elif args.use_lion:
+        optimizer_cls = Lion
     else:
         optimizer_cls = torch.optim.AdamW
 
