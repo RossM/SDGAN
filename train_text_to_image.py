@@ -38,7 +38,6 @@ from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-from lion_pytorch import Lion
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
@@ -275,6 +274,9 @@ def parse_args():
     )
     parser.add_argument(
         "--use_lion", action="store_true", help="Whether or not to use LION optimizer."
+    )
+    parser.add_argument(
+        "--use_scram", action="store_true", help="Whether or not to use SCRAM optimizer."
     )
     parser.add_argument(
         "--allow_tf32",
@@ -638,6 +640,8 @@ def main():
             eps=args.adam_epsilon,
         )
     elif args.use_lion:
+        from lion_pytorch import Lion
+
         optimizer_cls = Lion
         optimizer = optimizer_cls(
             unet.parameters(),
@@ -650,6 +654,24 @@ def main():
             lr=args.learning_rate,
             betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.adam_weight_decay,
+        )        
+    elif args.use_scram:
+        from scram_pytorch import Scram
+
+        optimizer_cls = Scram
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            beta=args.adam_beta1,
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            beta=args.adam_beta1,
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
         )        
     else:
         optimizer_cls = torch.optim.AdamW
@@ -983,7 +1005,7 @@ def main():
                 # allow the generator to catch up.
                 if discriminator_loss >= args.stabilize_d:
                     accelerator.backward(discriminator_loss)
-                    if accelerator.sync_gradients and not args.use_lion:
+                    if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                     optimizer_discriminator.step()
                     if global_step % 10 == 0:
@@ -1026,7 +1048,7 @@ def main():
 
                 # Backpropagate
                 accelerator.backward(loss)
-                if accelerator.sync_gradients and not args.use_lion:
+                if accelerator.sync_gradients and not args.use_lion and not args.use_scram::
                     accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
                 optimizer.step()
                 if global_step % 10 == 0:
