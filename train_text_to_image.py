@@ -662,14 +662,14 @@ def main():
         optimizer = optimizer_cls(
             unet.parameters(),
             lr=args.learning_rate,
-            beta=args.adam_beta1,
+            betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.adam_weight_decay,
             eps=args.adam_epsilon,
         )
         optimizer_discriminator = optimizer_cls(
             discriminator.parameters(),
             lr=args.learning_rate,
-            beta=args.adam_beta1,
+            betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.adam_weight_decay,
             eps=args.adam_epsilon,
         )        
