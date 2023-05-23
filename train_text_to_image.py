@@ -279,6 +279,9 @@ def parse_args():
         "--use_scram", action="store_true", help="Whether or not to use SCRAM optimizer."
     )
     parser.add_argument(
+        "--use_sdm", action="store_true", help="Whether or not to use SDM optimizer."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -659,6 +662,24 @@ def main():
         from scram_pytorch import Scram
 
         optimizer_cls = Scram
+        optimizer = optimizer_cls(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        optimizer_discriminator = optimizer_cls(
+            discriminator.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )        
+    elif args.use_sdm:
+        from scram_pytorch import SDM
+
+        optimizer_cls = SDM
         optimizer = optimizer_cls(
             unet.parameters(),
             lr=args.learning_rate,
