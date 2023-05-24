@@ -279,7 +279,7 @@ def parse_args():
         "--use_scram", action="store_true", help="Whether or not to use SCRAM optimizer."
     )
     parser.add_argument(
-        "--use_sdm", action="store_true", help="Whether or not to use SDM optimizer."
+        "--use_simon", "--use_sdm", action="store_true", help="Whether or not to use SIMON optimizer."
     )
     parser.add_argument(
         "--allow_tf32",
@@ -676,10 +676,10 @@ def main():
             weight_decay=args.adam_weight_decay,
             eps=args.adam_epsilon,
         )        
-    elif args.use_sdm:
-        from scram_pytorch import SDM
+    elif args.use_simon:
+        from scram_pytorch import Simon
 
-        optimizer_cls = SDM
+        optimizer_cls = Simon
         optimizer = optimizer_cls(
             unet.parameters(),
             lr=args.learning_rate,
