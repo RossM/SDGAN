@@ -282,6 +282,9 @@ def parse_args():
         "--use_simon", "--use_sdm", action="store_true", help="Whether or not to use SIMON optimizer."
     )
     parser.add_argument(
+        "--rmsclip", action="store_true", help="Enable RMSclip for SIMON."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -618,6 +621,13 @@ def main():
             args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
 
+    optimizer_kwargs = {
+        "lr": args.learning_rate,
+        "betas": (args.adam_beta1, args.adam_beta2),
+        "weight_decay": args.adam_weight_decay,
+        "eps": args.adam_epsilon,
+    }
+
     # Initialize the optimizer
     if args.use_8bit_adam:
         try:
@@ -628,89 +638,25 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
     elif args.use_lion:
         from lion_pytorch import Lion
 
         optimizer_cls = Lion
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-        )        
+        del optimizer_kwargs["eps"]
     elif args.use_scram:
         from scram_pytorch import Scram
 
         optimizer_cls = Scram
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )        
     elif args.use_simon:
         from scram_pytorch import Simon
 
         optimizer_cls = Simon
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )        
+        optimizer_kwargs["rmsclip"] = args.rmsclip
     else:
         optimizer_cls = torch.optim.AdamW
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
 
+    optimizer = optimizer_cls(unet.parameters(), **optimizer_kwargs)
+    optimizer_discriminator = optimizer_cls(discriminator.parameters(), **optimizer_kwargs)
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
