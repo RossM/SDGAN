@@ -285,6 +285,9 @@ def parse_args():
         "--rmsclip", action="store_true", help="Enable RMSclip for SIMON."
     )
     parser.add_argument(
+        "--layerwise", action="store_true", help="Enable layerwise scaling for SIMON."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -652,6 +655,7 @@ def main():
 
         optimizer_cls = Simon
         optimizer_kwargs["rmsclip"] = args.rmsclip
+        optimizer_kwargs["layerwise"] = args.layerwise
     else:
         optimizer_cls = torch.optim.AdamW
 
