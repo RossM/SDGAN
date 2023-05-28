@@ -1037,12 +1037,13 @@ def main():
 
             logs = {
                 "d_loss": discriminator_loss.item(),
-                "lr": lr_scheduler.get_last_lr()[0]
             }
-            if not args.freeze_unet:
+            if args.freeze_unet:
+                logs["lr"] = lr_scheduler_discriminator.get_last_lr()[0]
+            else:
+                logs["lr"] = lr_scheduler.get_last_lr()[0]
                 logs["mse_loss"] = mse_loss.item()
                 logs["gan_loss"] = gan_loss.item()
-                logs["lr"] = lr_scheduler_discriminator.get_last_lr()[0]
             progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
