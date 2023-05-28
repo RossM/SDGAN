@@ -431,6 +431,9 @@ def parse_args():
         required=False, 
         help="Loss threshold below which generator training will be frozen to allow the discriminator to catch up"
     )
+    parser.add_argument(
+        "--freeze_unet", action="store_true", help="Whether to freeze the unet."
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -989,47 +992,50 @@ def main():
                 # Freeze discriminator again for unet step
                 discriminator.requires_grad_(False)
 
-                # Compute normal diffusion loss
-                mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                # Compute GAN loss
-                discriminator_input = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
-                    discriminator,
-                    noise_scheduler,
-                    noisy_latents,
-                    model_pred,
-                    timesteps,
-                    noise,
-                )
-                discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
-                gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
-                del discriminator_input, discriminator_pred
-                
-                # Compute total loss
-                # If generator loss goes too low, training may be unstable. Reduce the GAN influence
-                # to allow the discriminator to catch up.
-                if gan_loss >= args.stabilize_g:
-                    loss = mse_loss + args.gan_weight * gan_loss
+                if args.freeze_unet:
+                    mse_loss = gan_loss = None
                 else:
-                    loss = mse_loss
+                    # Compute normal diffusion loss
+                    mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
-                # Gather the losses across all processes for logging (if we use distributed training).
-                #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                #train_loss += avg_loss.item() / args.gradient_accumulation_steps
-
-                # Backpropagate
-                accelerator.backward(loss)
-                if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
-                    accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                optimizer.step()
-                if global_step % 10 == 0:
-                    log_grad_norm("unet", unet, accelerator, global_step)
-                optimizer.zero_grad()
+                    # Compute GAN loss
+                    discriminator_input = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
+                        discriminator,
+                        noise_scheduler,
+                        noisy_latents,
+                        model_pred,
+                        timesteps,
+                        noise,
+                    )
+                    discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
+                    gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
+                    del discriminator_input, discriminator_pred
                     
-                lr_scheduler.step()
-                del model_pred, loss
-                mse_loss.detach_()
-                gan_loss.detach_()
+                    # Compute total loss
+                    # If generator loss goes too low, training may be unstable. Reduce the GAN influence
+                    # to allow the discriminator to catch up.
+                    if gan_loss >= args.stabilize_g:
+                        loss = mse_loss + args.gan_weight * gan_loss
+                    else:
+                        loss = mse_loss
+
+                    # Gather the losses across all processes for logging (if we use distributed training).
+                    #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                    #train_loss += avg_loss.item() / args.gradient_accumulation_steps
+
+                    # Backpropagate
+                    accelerator.backward(loss)
+                    if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
+                        accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+                    optimizer.step()
+                    if global_step % 10 == 0:
+                        log_grad_norm("unet", unet, accelerator, global_step)
+                    optimizer.zero_grad()
+                        
+                    lr_scheduler.step()
+                    del model_pred, loss
+                    mse_loss.detach_()
+                    gan_loss.detach_()
 
             logs = {
                 "mse_loss": mse_loss.item(),
