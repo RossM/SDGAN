@@ -992,9 +992,7 @@ def main():
                 # Freeze discriminator again for unet step
                 discriminator.requires_grad_(False)
 
-                if args.freeze_unet:
-                    mse_loss = gan_loss = None
-                else:
+                if not args.freeze_unet:
                     # Compute normal diffusion loss
                     mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
@@ -1038,11 +1036,12 @@ def main():
                     gan_loss.detach_()
 
             logs = {
-                "mse_loss": mse_loss.item(),
-                "gan_loss": gan_loss.item(),
                 "d_loss": discriminator_loss.item(),
                 "lr": lr_scheduler.get_last_lr()[0]
             }
+            if not args.freeze_unet:
+                logs["mse_loss"] = mse_loss.item()
+                logs["gan_loss"] = gan_loss.item()
             progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
