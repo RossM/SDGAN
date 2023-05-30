@@ -294,7 +294,7 @@ def parse_args():
         "--autolr", action="store_true", help="Enable autolr for SIMON."
     )
     parser.add_argument(
-        "--autolr_lr", type=float, default=0.99 help="Set autolr beta for SIMON."
+        "--autolr_lr", type=float, default=0.99, help="Set autolr beta for SIMON."
     )
     parser.add_argument(
         "--allow_tf32",
