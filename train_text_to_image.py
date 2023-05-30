@@ -993,7 +993,7 @@ def main():
                     accelerator.backward(discriminator_loss)
                     if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
-                    optimizer_discriminator.step()
+                    optimizer_discriminator.step(lambda: discriminator_loss)
                     if global_step % 10 == 0:
                         log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
