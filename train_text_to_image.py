@@ -294,6 +294,9 @@ def parse_args():
         "--autolr", action="store_true", help="Enable autolr for SIMON."
     )
     parser.add_argument(
+        "--autolr_lr", type=float, default=0.99 help="Set autolr beta for SIMON."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -667,6 +670,7 @@ def main():
         optimizer_kwargs["layerwise"] = args.layerwise
         optimizer_kwargs["normalize"] = args.simon_normalize
         optimizer_kwargs["autolr"] = args.autolr
+        optimizer_kwargs["autolr_beta"] = args.autolr_beta
     else:
         optimizer_cls = torch.optim.AdamW
 
