@@ -1052,7 +1052,7 @@ def main():
             }
             if args.freeze_unet:
                 logs["lr"] = lr_scheduler_discriminator.get_last_lr()[0]
-                if self.autolr:
+                if args.autolr:
                     logs["autolr"] = lr_scheduler_discriminator.get_last_lr()[0] * optimizer_discriminator.lr_mult
             else:
                 logs["lr"] = lr_scheduler.get_last_lr()[0]
