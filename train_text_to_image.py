@@ -1022,25 +1022,24 @@ def main():
                     del discriminator_input, discriminator_pred
                     
                     # Compute total loss
-                    # If generator loss goes too low, training may be unstable. Reduce the GAN influence
+                    loss = mse_loss + args.gan_weight * gan_loss
+
+                    # If generator loss goes too low, training may be unstable. Freeze the generator
                     # to allow the discriminator to catch up.
                     if gan_loss >= args.stabilize_g:
-                        loss = mse_loss + args.gan_weight * gan_loss
-                    else:
-                        loss = mse_loss
 
-                    # Gather the losses across all processes for logging (if we use distributed training).
-                    #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                    #train_loss += avg_loss.item() / args.gradient_accumulation_steps
+                        # Gather the losses across all processes for logging (if we use distributed training).
+                        #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                        #train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
-                    # Backpropagate
-                    accelerator.backward(loss)
-                    if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
-                        accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                    optimizer.step()
-                    if global_step % 10 == 0:
-                        log_grad_norm("unet", unet, accelerator, global_step)
-                    optimizer.zero_grad()
+                        # Backpropagate
+                        accelerator.backward(loss)
+                        if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
+                            accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+                        optimizer.step(lambda: loss)
+                        if global_step % 10 == 0:
+                            log_grad_norm("unet", unet, accelerator, global_step)
+                        optimizer.zero_grad()
                         
                     lr_scheduler.step()
                     del model_pred, loss
