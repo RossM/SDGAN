@@ -1058,8 +1058,8 @@ def main():
                     avg_gan_loss.detach_()
 
             logs = {
-                d_loss = avg_discriminator_loss.item(),
-                d_lr = lr_scheduler_discriminator.get_last_lr()[0]
+                "d_loss": avg_discriminator_loss.item(),
+                "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
             }
             if not args.freeze_unet:
                 logs["mse_loss"] = avg_mse_loss.item()
