@@ -291,12 +291,6 @@ def parse_args():
         "--simon_normalize", action="store_true", help="Enable normalization for SIMON."
     )
     parser.add_argument(
-        "--autolr", action="store_true", help="Enable autolr for SIMON."
-    )
-    parser.add_argument(
-        "--autolr_beta", type=float, default=0.99, help="Set autolr beta for SIMON."
-    )
-    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -669,8 +663,6 @@ def main():
         optimizer_kwargs["rmsclip"] = args.rmsclip
         optimizer_kwargs["layerwise"] = args.layerwise
         optimizer_kwargs["normalize"] = args.simon_normalize
-        optimizer_kwargs["autolr"] = args.autolr
-        optimizer_kwargs["autolr_beta"] = args.autolr_beta
     else:
         optimizer_cls = torch.optim.AdamW
 
@@ -833,18 +825,24 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    lr_scheduler = get_scheduler(
-        args.lr_scheduler,
-        optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
-    )
-    lr_scheduler_discriminator = get_scheduler(
-        args.lr_scheduler,
-        optimizer=optimizer_discriminator,
-        num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
-    )
+    if args.lr_scheduler == "auto":
+        from scram_pytorch import AutoLR
+        
+        lr_scheduler = AutoLR(optimizer)
+        lr_scheduler_discriminator = AutoLR(optimizer_discriminator)
+    else:
+        lr_scheduler = get_scheduler(
+            args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
+            num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        )
+        lr_scheduler_discriminator = get_scheduler(
+            args.lr_scheduler,
+            optimizer=optimizer_discriminator,
+            num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
+            num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        )
 
     # Prepare everything with our `accelerator`.
     unet, optimizer, train_dataloader, lr_scheduler, discriminator, optimizer_discriminator, lr_scheduler_discriminator = accelerator.prepare(
@@ -996,11 +994,14 @@ def main():
                     accelerator.backward(discriminator_loss)
                     if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
-                    optimizer_discriminator.step(lambda: avg_discriminator_loss)
+                    optimizer_discriminator.step()
                     if global_step % 10 == 0:
                         log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
-                lr_scheduler_discriminator.step()
+                    if args.lr_scheduler == "auto":
+                        lr_scheduler_discriminator.step(avg_discriminator_loss)
+                    else:
+                        lr_scheduler_discriminator.step()
                 del discriminator_input, discriminator_pred, discriminator_target, discriminator_loss
                 avg_discriminator_loss.detach_()
                 
@@ -1042,12 +1043,16 @@ def main():
                         accelerator.backward(loss)
                         if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                             accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                        optimizer.step(lambda: avg_loss)
+                        optimizer.step()
                         if global_step % 10 == 0:
                             log_grad_norm("unet", unet, accelerator, global_step)
                         optimizer.zero_grad()
                         
-                    lr_scheduler.step()
+                        if args.lr_scheduler == "auto":
+                            lr_scheduler.step(avg_loss)
+                        else:
+                            lr_scheduler.step()
+
                     del model_pred, mse_loss, gan_loss, loss, avg_loss
                     avg_mse_loss.detach_()
                     avg_gan_loss.detach_()
