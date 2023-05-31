@@ -987,9 +987,12 @@ def main():
                 discriminator_pred = discriminator(discriminator_input, timesteps.repeat(2), encoder_hidden_states.repeat(2, 1, 1))
                 discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
                 discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
+                
+                avg_discriminator_loss = accelerator.gather(discriminator_loss.repeat(args.train_batch_size)).mean()
+                
                 # If discriminator loss goes too low, training may be unstable. Freeze the discriminator to
                 # allow the generator to catch up.
-                if discriminator_loss >= args.stabilize_d:
+                if avg_discriminator_loss >= args.stabilize_d:
                     accelerator.backward(discriminator_loss)
                     if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
@@ -998,8 +1001,8 @@ def main():
                         log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
                 lr_scheduler_discriminator.step()
-                del discriminator_input, discriminator_pred, discriminator_target
-                discriminator_loss.detach_()
+                del discriminator_input, discriminator_pred, discriminator_target, discriminator_loss
+                avg_discriminator_loss.detach_()
                 
                 # Freeze discriminator again for unet step
                 discriminator.requires_grad_(False)
@@ -1023,10 +1026,12 @@ def main():
                     
                     # Compute total loss
                     loss = mse_loss + args.gan_weight * gan_loss
+                    avg_gan_loss = accelerator.gather(gan_loss.repeat(args.train_batch_size)).mean()
+                    avg_mse_loss = accelerator.gather(mse_loss.repeat(args.train_batch_size)).mean()
 
                     # If generator loss goes too low, training may be unstable. Freeze the generator
                     # to allow the discriminator to catch up.
-                    if gan_loss >= args.stabilize_g:
+                    if avg_gan_loss >= args.stabilize_g:
 
                         # Gather the losses across all processes for logging (if we use distributed training).
                         #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
@@ -1042,12 +1047,12 @@ def main():
                         optimizer.zero_grad()
                         
                     lr_scheduler.step()
-                    del model_pred, loss
-                    mse_loss.detach_()
-                    gan_loss.detach_()
+                    del model_pred, mse_loss, gan_loss, loss
+                    avg_mse_loss.detach_()
+                    avg_gan_loss.detach_()
 
             logs = {
-                "d_loss": discriminator_loss.item(),
+                "d_loss": avg_discriminator_loss.item(),
             }
             if args.freeze_unet:
                 logs["lr"] = lr_scheduler_discriminator.get_last_lr()[0]
@@ -1055,8 +1060,8 @@ def main():
                     logs["autolr"] = lr_scheduler_discriminator.get_last_lr()[0] * optimizer_discriminator.optimizer.lr_mult
             else:
                 logs["lr"] = lr_scheduler.get_last_lr()[0]
-                logs["mse_loss"] = mse_loss.item()
-                logs["gan_loss"] = gan_loss.item()
+                logs["mse_loss"] = avg_mse_loss.item()
+                logs["gan_loss"] = _avggan_loss.item()
             progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
