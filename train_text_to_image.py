@@ -996,7 +996,7 @@ def main():
                     accelerator.backward(discriminator_loss)
                     if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
-                    optimizer_discriminator.step(lambda: discriminator_loss)
+                    optimizer_discriminator.step(lambda: avg_discriminator_loss)
                     if global_step % 10 == 0:
                         log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
@@ -1026,6 +1026,7 @@ def main():
                     
                     # Compute total loss
                     loss = mse_loss + args.gan_weight * gan_loss
+                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                     avg_gan_loss = accelerator.gather(gan_loss.repeat(args.train_batch_size)).mean()
                     avg_mse_loss = accelerator.gather(mse_loss.repeat(args.train_batch_size)).mean()
 
@@ -1041,13 +1042,13 @@ def main():
                         accelerator.backward(loss)
                         if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                             accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                        optimizer.step(lambda: loss)
+                        optimizer.step(lambda: avg_loss)
                         if global_step % 10 == 0:
                             log_grad_norm("unet", unet, accelerator, global_step)
                         optimizer.zero_grad()
                         
                     lr_scheduler.step()
-                    del model_pred, mse_loss, gan_loss, loss
+                    del model_pred, mse_loss, gan_loss, loss, avg_loss
                     avg_mse_loss.detach_()
                     avg_gan_loss.detach_()
 
