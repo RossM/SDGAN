@@ -321,6 +321,9 @@ def parse_args():
     parser.add_argument("--adam_beta2", type=float, default=0.99, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
+    parser.add_argument("--autolr_beta1", type=float, default=0.9, help="The beta1 parameter for the AutoLR scheduler.")
+    parser.add_argument("--autolr_beta2", type=float, default=0.99, help="The beta2 parameter for the AutoLR scheduler.")
+    parser.add_argument("--autolr_rate", type=float, default=0.1, help="The adjustment rate parameter for the AutoLR scheduler.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
@@ -828,8 +831,16 @@ def main():
     if args.lr_scheduler == "auto":
         from scram_pytorch import AutoLR
         
-        lr_scheduler = AutoLR(optimizer)
-        lr_scheduler_discriminator = AutoLR(optimizer_discriminator)
+        lr_scheduler = AutoLR(
+            optimizer,
+            betas = (args.autolr_beta1, args.autolr_beta2),
+            adjustment_rate = args.autolr_rate,
+        )
+        lr_scheduler_discriminator = AutoLR(
+            optimizer_discriminator,
+            betas = (args.autolr_beta1, args.autolr_beta2),
+            adjustment_rate = args.autolr_rate,
+        )
     else:
         lr_scheduler = get_scheduler(
             args.lr_scheduler,
