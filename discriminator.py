@@ -332,6 +332,7 @@ class Discriminator2D(ModelMixin, ConfigMixin):
         if self.config.prediction_type == "target":
             # In target mode, the discriminator predicts directly from the unet output
             discriminator_input = model_pred
+            next_timesteps = timesteps
         else:
             predicted_latents = get_predicted_latents(noisy_latents, model_pred, timesteps, noise_scheduler)
 
@@ -363,5 +364,5 @@ class Discriminator2D(ModelMixin, ConfigMixin):
             # Some discriminator modes get both the unet input and output
             discriminator_input = torch.cat((noisy_latents, discriminator_input), 1)
 
-        return discriminator_input
+        return discriminator_input, next_timesteps
         

@@ -991,7 +991,7 @@ def main():
                 discriminator.requires_grad_(True)
 
                 # Train discriminator
-                discriminator_input = discriminator.get_input(
+                discriminator_input, next_timesteps = discriminator.get_input(
                     noise_scheduler=noise_scheduler,
                     noisy_latents=noisy_latents,
                     model_pred=torch.cat((target, model_pred), 0),
@@ -999,7 +999,7 @@ def main():
                     noise=noise,
                 )
                 discriminator_input.detach_()
-                discriminator_pred = discriminator(discriminator_input, timesteps.repeat(2), encoder_hidden_states.repeat(2, 1, 1))
+                discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states.repeat(2, 1, 1))
                 discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
                 discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
                 
@@ -1030,7 +1030,7 @@ def main():
                     mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
                     # Compute GAN loss
-                    discriminator_input = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
+                    discriminator_input, next_timesteps = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
                         discriminator,
                         noise_scheduler,
                         noisy_latents,
@@ -1038,7 +1038,7 @@ def main():
                         timesteps,
                         noise,
                     )
-                    discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
+                    discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states)
                     gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
                     del discriminator_input, discriminator_pred
                     
