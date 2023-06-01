@@ -324,7 +324,8 @@ def parse_args():
     parser.add_argument("--autolr_beta1", type=float, default=0.9, help="The beta1 parameter for the AutoLR scheduler.")
     parser.add_argument("--autolr_beta2", type=float, default=0.99, help="The beta2 parameter for the AutoLR scheduler.")
     parser.add_argument("--autolr_rate", type=float, default=0.1, help="The adjustment rate parameter for the AutoLR scheduler.")
-    parser.add_argument("--autolr_noise_level", type=float, default=0.1, help="The noise_level parameter for the AutoLR scheduler.")
+    parser.add_argument("--autolr_noise_level", type=float, default=0.1, help="The noise level parameter for the AutoLR scheduler.")
+    parser.add_argument("--autolr_bias", type=float, default=0, help="The bias parameter for the AutoLR scheduler.")
     parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
@@ -837,12 +838,14 @@ def main():
             betas = (args.autolr_beta1, args.autolr_beta2),
             adjustment_rate = args.autolr_rate,
             noise_level = args.autolr_noise_level,
+            bias = args.autolr_bias,
         )
         lr_scheduler_discriminator = AutoLR(
             optimizer_discriminator,
             betas = (args.autolr_beta1, args.autolr_beta2),
             adjustment_rate = args.autolr_rate,
             noise_level = args.autolr_noise_level,
+            bias = args.autolr_bias,
         )
     else:
         lr_scheduler = get_scheduler(
