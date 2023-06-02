@@ -1047,10 +1047,14 @@ def main():
                     avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                     avg_gan_loss = accelerator.gather(gan_loss.repeat(args.train_batch_size)).mean()
                     avg_mse_loss = accelerator.gather(mse_loss.repeat(args.train_batch_size)).mean()
+                    
+                    # If training starts divering, restore parameters from ema
+                    if args.use_ema and avg_mse_loss > 0.5:
+                        ema_unet.copy_to(unet.parameters)
 
                     # If generator loss goes too low, training may be unstable. Freeze the generator
                     # to allow the discriminator to catch up.
-                    if avg_gan_loss >= args.stabilize_g:
+                    elif avg_gan_loss >= args.stabilize_g:
 
                         # Gather the losses across all processes for logging (if we use distributed training).
                         #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
