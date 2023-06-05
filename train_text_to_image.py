@@ -691,7 +691,6 @@ def main():
         from scram_pytorch import EnsembleSGD
 
         optimizer_cls = EnsembleSGD
-        del optimizer_kwargs["betas"]
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
