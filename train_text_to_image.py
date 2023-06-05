@@ -299,6 +299,9 @@ def parse_args():
         "--simon_normalize", action="store_true", help="Enable normalization for SIMON."
     )
     parser.add_argument(
+        "--esgd_p", type=float, default=0.5, help="Optimizer p parameter (ESGD only)."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -691,6 +694,7 @@ def main():
         from scram_pytorch import EnsembleSGD
 
         optimizer_cls = EnsembleSGD
+        optimizer_kwargs["p"] = args.esgd_p
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
