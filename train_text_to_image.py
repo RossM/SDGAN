@@ -282,6 +282,14 @@ def parse_args():
         "--use_simon", "--use_sdm", action="store_true", help="Whether or not to use SIMON optimizer."
     )
     parser.add_argument(
+        "--optimizer", 
+        type=str, 
+        default="adam", 
+        help=(
+            'The optimizer type to use. Choose between ["adam", "8bit_adam", "lion", "scram", "simon", "esgd"]'
+        )
+    )
+    parser.add_argument(
         "--rmsclip", action="store_true", help="Enable RMSclip for SIMON."
     )
     parser.add_argument(
@@ -461,6 +469,15 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.use_8bit_adam:
+        args.optimizer = '8bit_adam'
+    elif args.use_lion:
+        args.optimizer = 'lion'
+    elif args.use_simon:
+        args.optimizer = 'simon'
+    elif args.use_scram:
+        args.optimizer = 'scram'
 
     if args.non_ema_revision is not None:
         deprecate(
@@ -643,7 +660,9 @@ def main():
     }
 
     # Initialize the optimizer
-    if args.use_8bit_adam:
+    if args.optimizer == 'adam':
+        optimizer_cls = torch.optim.AdamW
+    elif args.optimizer == '8bit_adam':
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -652,24 +671,29 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
-    elif args.use_lion:
+    elif args.optimizer == 'lion':
         from lion_pytorch import Lion
 
         optimizer_cls = Lion
         del optimizer_kwargs["eps"]
-    elif args.use_scram:
+    elif args.optimizer == 'scram':
         from scram_pytorch import Scram
 
         optimizer_cls = Scram
-    elif args.use_simon:
+    elif args.optimizer == 'simon':
         from scram_pytorch import Simon
 
         optimizer_cls = Simon
         optimizer_kwargs["rmsclip"] = args.rmsclip
         optimizer_kwargs["layerwise"] = args.layerwise
         optimizer_kwargs["normalize"] = args.simon_normalize
+    elif args.optimizer == 'esgd':
+        from scram_pytorch import EnsembleSGD
+
+        optimizer_cls = EnsembleSGD
+        del optimizer_kwargs["betas"]
     else:
-        optimizer_cls = torch.optim.AdamW
+        raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
     optimizer = optimizer_cls(unet.parameters(), **optimizer_kwargs)
     optimizer_discriminator = optimizer_cls(discriminator.parameters(), **optimizer_kwargs)
