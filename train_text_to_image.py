@@ -305,6 +305,9 @@ def parse_args():
         "--esgd_swap_ratio", type=float, default=1.0, help="Optimizer swap_ratio parameter (ESGD only)."
     )
     parser.add_argument(
+        "--esgd_ungroup", type=int, action="append", help="Optimizer ungroup_dims parameter (ESGD only)."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -699,6 +702,7 @@ def main():
         optimizer_cls = EnsembleSGD
         optimizer_kwargs["p"] = args.esgd_p
         optimizer_kwargs["swap_ratio"] = args.esgd_swap_ratio
+        optimizer_kwargs["ungroup_dims"] = args.esgd_ungroup
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
