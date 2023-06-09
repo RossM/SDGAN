@@ -703,6 +703,7 @@ def main():
         optimizer_kwargs["p"] = args.esgd_p
         optimizer_kwargs["swap_ratio"] = args.esgd_swap_ratio
         optimizer_kwargs["ungroup_dims"] = args.esgd_ungroup
+        optimizer_kwargs["normalize"] = args.simon_normalize
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
