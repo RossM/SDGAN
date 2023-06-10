@@ -38,7 +38,6 @@ from packaging import version
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-from lion_pytorch import Lion
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
@@ -277,6 +276,35 @@ def parse_args():
         "--use_lion", action="store_true", help="Whether or not to use LION optimizer."
     )
     parser.add_argument(
+        "--use_scram", action="store_true", help="Whether or not to use SCRAM optimizer."
+    )
+    parser.add_argument(
+        "--use_simon", "--use_sdm", action="store_true", help="Whether or not to use SIMON optimizer."
+    )
+    parser.add_argument(
+        "--optimizer", 
+        type=str, 
+        default="adam", 
+        help=(
+            'The optimizer type to use. Choose between ["adam", "8bit_adam", "lion", "scram", "simon", "esgd"]'
+        )
+    )
+    parser.add_argument(
+        "--rmsclip", action="store_true", help="Enable RMSclip for SIMON."
+    )
+    parser.add_argument(
+        "--layerwise", action="store_true", help="Enable layerwise scaling for SIMON."
+    )
+    parser.add_argument(
+        "--simon_normalize", action="store_true", help="Enable normalization for SIMON."
+    )
+    parser.add_argument(
+        "--esgd_p", type=float, default=0.5, help="Optimizer p parameter (ESGD only)."
+    )
+    parser.add_argument(
+        "--esgd_swap_ratio", type=float, default=1.0, help="Optimizer swap_ratio parameter (ESGD only)."
+    )
+    parser.add_argument(
         "--allow_tf32",
         action="store_true",
         help=(
@@ -420,6 +448,9 @@ def parse_args():
         required=False, 
         help="Loss threshold below which generator training will be frozen to allow the discriminator to catch up"
     )
+    parser.add_argument(
+        "--freeze_unet", action="store_true", help="Whether to freeze the unet."
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -439,6 +470,15 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.use_8bit_adam:
+        args.optimizer = '8bit_adam'
+    elif args.use_lion:
+        args.optimizer = 'lion'
+    elif args.use_simon:
+        args.optimizer = 'simon'
+    elif args.use_scram:
+        args.optimizer = 'scram'
 
     if args.non_ema_revision is not None:
         deprecate(
@@ -613,8 +653,17 @@ def main():
             args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
 
+    optimizer_kwargs = {
+        "lr": args.learning_rate,
+        "betas": (args.adam_beta1, args.adam_beta2),
+        "weight_decay": args.adam_weight_decay,
+        "eps": args.adam_epsilon,
+    }
+
     # Initialize the optimizer
-    if args.use_8bit_adam:
+    if args.optimizer == 'adam':
+        optimizer_cls = torch.optim.AdamW
+    elif args.optimizer == '8bit_adam':
         try:
             import bitsandbytes as bnb
         except ImportError:
@@ -623,51 +672,33 @@ def main():
             )
 
         optimizer_cls = bnb.optim.AdamW8bit
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-    elif args.use_lion:
-        optimizer_cls = Lion
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-        )        
-    else:
-        optimizer_cls = torch.optim.AdamW
-        optimizer = optimizer_cls(
-            unet.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-        optimizer_discriminator = optimizer_cls(
-            discriminator.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
+    elif args.optimizer == 'lion':
+        from lion_pytorch import Lion
 
+        optimizer_cls = Lion
+        del optimizer_kwargs["eps"]
+    elif args.optimizer == 'scram':
+        from scram_pytorch import Scram
+
+        optimizer_cls = Scram
+    elif args.optimizer == 'simon':
+        from scram_pytorch import Simon
+
+        optimizer_cls = Simon
+        optimizer_kwargs["rmsclip"] = args.rmsclip
+        optimizer_kwargs["layerwise"] = args.layerwise
+        optimizer_kwargs["normalize"] = args.simon_normalize
+    elif args.optimizer == 'esgd':
+        from scram_pytorch import EnsembleSGD
+
+        optimizer_cls = EnsembleSGD
+        optimizer_kwargs["p"] = args.esgd_p
+        optimizer_kwargs["swap_ratio"] = args.esgd_swap_ratio
+    else:
+        raise ValueError(f"Unknown optimizer `{args.optimizer}`")
+
+    optimizer = optimizer_cls(unet.parameters(), **optimizer_kwargs)
+    optimizer_discriminator = optimizer_cls(discriminator.parameters(), **optimizer_kwargs)
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
@@ -968,7 +999,7 @@ def main():
                 discriminator.requires_grad_(True)
 
                 # Train discriminator
-                discriminator_input = discriminator.get_input(
+                discriminator_input, next_timesteps = discriminator.get_input(
                     noise_scheduler=noise_scheduler,
                     noisy_latents=noisy_latents,
                     model_pred=torch.cat((target, model_pred), 0),
@@ -976,74 +1007,93 @@ def main():
                     noise=noise,
                 )
                 discriminator_input.detach_()
-                discriminator_pred = discriminator(discriminator_input, timesteps.repeat(2), encoder_hidden_states.repeat(2, 1, 1))
+                discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states.repeat(2, 1, 1))
                 discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
                 discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
+                
+                avg_discriminator_loss = accelerator.gather(discriminator_loss.repeat(args.train_batch_size)).mean()
+                
                 # If discriminator loss goes too low, training may be unstable. Freeze the discriminator to
                 # allow the generator to catch up.
-                if discriminator_loss >= args.stabilize_d:
+                if avg_discriminator_loss >= args.stabilize_d:
                     accelerator.backward(discriminator_loss)
-                    if accelerator.sync_gradients and not args.use_lion:
+                    if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
                         accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
                     optimizer_discriminator.step()
                     if global_step % 10 == 0:
                         log_grad_norm("discriminator", discriminator, accelerator, global_step)
                     optimizer_discriminator.zero_grad()
-                lr_scheduler_discriminator.step()
-                del discriminator_input, discriminator_pred, discriminator_target
-                discriminator_loss.detach_()
+                    if args.lr_scheduler == "auto":
+                        lr_scheduler_discriminator.step(avg_discriminator_loss)
+                    else:
+                        lr_scheduler_discriminator.step()
+                del discriminator_input, discriminator_pred, discriminator_target, discriminator_loss
+                avg_discriminator_loss.detach_()
                 
                 # Freeze discriminator again for unet step
                 discriminator.requires_grad_(False)
 
-                # Compute normal diffusion loss
-                mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                if not args.freeze_unet:
+                    # Compute normal diffusion loss
+                    mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
-                # Compute GAN loss
-                discriminator_input = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
-                    discriminator,
-                    noise_scheduler,
-                    noisy_latents,
-                    model_pred,
-                    timesteps,
-                    noise,
-                )
-                discriminator_pred = discriminator(discriminator_input, timesteps, encoder_hidden_states)
-                gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
-                del discriminator_input, discriminator_pred
-                
-                # Compute total loss
-                # If generator loss goes too low, training may be unstable. Reduce the GAN influence
-                # to allow the discriminator to catch up.
-                if gan_loss >= args.stabilize_g:
-                    loss = mse_loss + args.gan_weight * gan_loss
-                else:
-                    loss = mse_loss
-
-                # Gather the losses across all processes for logging (if we use distributed training).
-                #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                #train_loss += avg_loss.item() / args.gradient_accumulation_steps
-
-                # Backpropagate
-                accelerator.backward(loss)
-                if accelerator.sync_gradients and not args.use_lion:
-                    accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                optimizer.step()
-                if global_step % 10 == 0:
-                    log_grad_norm("unet", unet, accelerator, global_step)
-                optimizer.zero_grad()
+                    # Compute GAN loss
+                    discriminator_input, next_timesteps = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
+                        discriminator,
+                        noise_scheduler,
+                        noisy_latents,
+                        model_pred,
+                        timesteps,
+                        noise,
+                    )
+                    discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states)
+                    gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
+                    del discriminator_input, discriminator_pred
                     
-                lr_scheduler.step()
-                del model_pred, loss
-                mse_loss.detach_()
-                gan_loss.detach_()
+                    # Compute total loss
+                    loss = mse_loss + args.gan_weight * gan_loss
+                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                    avg_gan_loss = accelerator.gather(gan_loss.repeat(args.train_batch_size)).mean()
+                    avg_mse_loss = accelerator.gather(mse_loss.repeat(args.train_batch_size)).mean()
+                    
+                    # If training starts divering, restore parameters from ema
+                    if args.use_ema and avg_mse_loss > 0.5:
+                        ema_unet.copy_to(unet.parameters)
+
+                    # If generator loss goes too low, training may be unstable. Freeze the generator
+                    # to allow the discriminator to catch up.
+                    elif avg_gan_loss >= args.stabilize_g:
+
+                        # Gather the losses across all processes for logging (if we use distributed training).
+                        #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                        #train_loss += avg_loss.item() / args.gradient_accumulation_steps
+
+                        # Backpropagate
+                        accelerator.backward(loss)
+                        if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
+                            accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
+                        optimizer.step()
+                        if global_step % 10 == 0:
+                            log_grad_norm("unet", unet, accelerator, global_step)
+                        optimizer.zero_grad()
+                        
+                        if args.lr_scheduler == "auto":
+                            lr_scheduler.step(avg_loss)
+                        else:
+                            lr_scheduler.step()
+
+                    del model_pred, mse_loss, gan_loss, loss, avg_loss
+                    avg_mse_loss.detach_()
+                    avg_gan_loss.detach_()
 
             logs = {
-                "mse_loss": mse_loss.item(),
-                "gan_loss": gan_loss.item(),
-                "d_loss": discriminator_loss.item(),
-                "lr": lr_scheduler.get_last_lr()[0]
+                "d_loss": avg_discriminator_loss.item(),
+                "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
             }
+            if not args.freeze_unet:
+                logs["mse_loss"] = avg_mse_loss.item()
+                logs["gan_loss"] = avg_gan_loss.item()
+                logs["g_lr"] = lr_scheduler.get_last_lr()[0]
             progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
