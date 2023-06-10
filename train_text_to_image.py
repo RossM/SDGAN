@@ -299,6 +299,9 @@ def parse_args():
         "--simon_normalize", action="store_true", help="Enable normalization for SIMON."
     )
     parser.add_argument(
+        "--distance_weighted", action="store_true", help="Enable distance weighting for SIMON."
+    )
+    parser.add_argument(
         "--esgd_p", type=float, default=0.5, help="Optimizer p parameter (ESGD only)."
     )
     parser.add_argument(
@@ -688,6 +691,7 @@ def main():
         optimizer_kwargs["rmsclip"] = args.rmsclip
         optimizer_kwargs["layerwise"] = args.layerwise
         optimizer_kwargs["normalize"] = args.simon_normalize
+        optimizer_kwargs["distance_weighted"] = args.distance_weighted
     elif args.optimizer == 'esgd':
         from scram_pytorch import EnsembleSGD
 
