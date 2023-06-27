@@ -345,15 +345,6 @@ def parse_args():
         help="The name of the repository to keep in sync with the local `output_dir`.",
     )
     parser.add_argument(
-        "--logging_dir",
-        type=str,
-        default="logs",
-        help=(
-            "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
-        ),
-    )
-    parser.add_argument(
         "--mixed_precision",
         type=str,
         default=None,
@@ -489,7 +480,6 @@ def main():
                 " use `--variant=non_ema` instead."
             ),
         )
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
 
@@ -497,7 +487,6 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
         project_config=accelerator_project_config,
     )
 
