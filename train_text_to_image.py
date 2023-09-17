@@ -41,6 +41,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 import diffusers
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
+from diffusers import VQModel, DDIMScheduler, LDMPipeline, UNet2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
@@ -67,17 +68,28 @@ DATASET_NAME_MAPPING = {
 def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight_dtype, epoch):
     logger.info("Running validation... ")
 
-    pipeline = StableDiffusionPipeline.from_pretrained(
-        args.pretrained_model_name_or_path,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        unet=accelerator.unwrap_model(unet),
-        safety_checker=None,
-        revision=args.revision,
-        torch_dtype=weight_dtype,
-        requires_safety_checker=False,
-    )
+    if not args.ldm:
+        pipeline = StableDiffusionPipeline.from_pretrained(
+            args.pretrained_model_name_or_path,
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            unet=accelerator.unwrap_model(unet),
+            safety_checker=None,
+            revision=args.revision,
+            torch_dtype=weight_dtype,
+            requires_safety_checker=False,
+        )
+    else:
+        pipeline = StableDiffusionPipeline.from_pretrained(
+            args.pretrained_model_name_or_path,
+            vqvae=vae,
+            unet=accelerator.unwrap_model(unet),
+            safety_checker=None,
+            revision=args.revision,
+            torch_dtype=weight_dtype,
+            requires_safety_checker=False,
+        )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
@@ -442,6 +454,9 @@ def parse_args():
     parser.add_argument(
         "--freeze_unet", action="store_true", help="Whether to freeze the unet."
     )
+    parser.add_argument(
+        "--ldm", action="store_true", help="Train an unconditional latent diffusion model."
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -521,17 +536,27 @@ def main():
             ).repo_id
 
     # Load scheduler, tokenizer and models.
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
-    tokenizer = CLIPTokenizer.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
-    )
-    text_encoder = CLIPTextModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
-    )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
-    )
+    if not args.ldm:
+        noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+        tokenizer = CLIPTokenizer.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
+        )
+        text_encoder = CLIPTextModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+        )
+        vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
+        unet = UNet2DConditionModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        )
+    else:
+        noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+        tokenizer = None
+        text_encoder = None
+        vae = VQModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision)
+        unet = UNet2DModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        )
+        
     try:
         discriminator = Discriminator2D.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="discriminator"
@@ -543,7 +568,8 @@ def main():
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
-    text_encoder.requires_grad_(False)
+    if not args.ldm:
+        text_encoder.requires_grad_(False)
     
     # Freeze discriminator (it will be unfrozen as needed)
     discriminator.requires_grad_(False)
@@ -722,18 +748,25 @@ def main():
     def preprocess_train(examples):
         images = [image.convert("RGB") for image in examples[image_column]]
         examples["pixel_values"] = [train_transforms(image) for image in images]
-        examples["input_ids"] = tokenize_captions(examples)
+        if not args.ldm:
+            examples["input_ids"] = tokenize_captions(examples)
         return examples
         
     def preprocess_one(example):
         example["pixel_values"] = train_transforms(example[image_column].convert("RGB"))
-        example["input_ids"] = tokenize_captions({caption_column: [example[caption_column]]})[0]
+        if not args.ldm:
+            example["input_ids"] = tokenize_captions({caption_column: [example[caption_column]]})[0]
+        else:
+            example["input_ids"] = None
         return example
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-        input_ids = torch.stack([example["input_ids"] for example in examples])
+        if not args.ldm:
+            input_ids = torch.stack([example["input_ids"] for example in examples])
+        else:
+            input_ids = None
         return {"pixel_values": pixel_values, "input_ids": input_ids}
         
     def size_check(sample):
@@ -800,6 +833,8 @@ def main():
         # We need to tokenize inputs and targets.
         if args.image_column is None or args.caption_column is None:
             column_names = dataset["train"].column_names
+        else:
+            column_names = [args.image_column, args.caption_column]
 
         # 6. Get the column names for input/target.
         dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
@@ -811,14 +846,16 @@ def main():
                 raise ValueError(
                     f"--image_column' value '{args.image_column}' needs to be one of: {', '.join(column_names)}"
                 )
-        if args.caption_column is None:
-            caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-        else:
-            caption_column = args.caption_column
-            if caption_column not in column_names:
-                raise valueerror(
-                    f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
-                )
+                
+        if not args.ldm:
+            if args.caption_column is None:
+                caption_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+            else:
+                caption_column = args.caption_column
+                if caption_column not in column_names:
+                    raise valueerror(
+                        f"--caption_column' value '{args.caption_column}' needs to be one of: {', '.join(column_names)}"
+                    )
 
         with accelerator.main_process_first():
             if args.max_train_samples is not None:
@@ -875,7 +912,8 @@ def main():
         weight_dtype = torch.bfloat16
 
     # Move text_encode and vae to gpu and cast to weight_dtype
-    text_encoder.to(accelerator.device, dtype=weight_dtype)
+    if not args.ldm:
+        text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -950,8 +988,11 @@ def main():
 
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                if not args.ldm:
+                    latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+                    latents = latents * vae.config.scaling_factor
+                else:
+                    latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
@@ -971,10 +1012,13 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                if not args.ldm:
+                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                else:
+                    encoder_hidden_states = torch.empty([0, 0, 0])
 
                 # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
+                if isinstance(noise_scheduler, DDIMScheduler) or noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
@@ -982,7 +1026,10 @@ def main():
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 # Predict the noise residual
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                if not args.ldm:
+                    model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                else:
+                    model_pred = unet(noisy_latents, timesteps).sample
 
                 # Unfreeze discriminator for discriminator step
                 discriminator.requires_grad_(True)
@@ -1132,13 +1179,21 @@ def main():
         if args.use_ema:
             ema_unet.copy_to(unet.parameters())
 
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path,
-            text_encoder=text_encoder,
-            vae=vae,
-            unet=unet,
-            revision=args.revision,
-        )
+        if not args.ldm:
+            pipeline = StableDiffusionPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                text_encoder=text_encoder,
+                vae=vae,
+                unet=unet,
+                revision=args.revision,
+            )
+        else:
+            pipeline = LDMPipeline.from_pretrained(
+                args.pretrained_model_name_or_path,
+                vqvae=vae,
+                unet=unet,
+                revision=args.revision,
+            )
         pipeline.save_pretrained(args.output_dir)
         discriminator.save_pretrained(os.path.join(args.output_dir, "discriminator"))
 

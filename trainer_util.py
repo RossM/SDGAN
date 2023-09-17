@@ -3,7 +3,7 @@ import torch
 import torch.nn.functional as F
 import einops
 from accelerate import Accelerator
-from diffusers import DDPMScheduler
+from diffusers import DDPMScheduler, DDIMScheduler
 from torch import Tensor
 from torch.nn import Module
 
@@ -34,7 +34,7 @@ def get_predicted_latents(
     sqrt_one_minus_alpha_prod = (1 - alphas_cumprod[timesteps]) ** 0.5
     sqrt_one_minus_alpha_prod = unsqueeze_like(sqrt_one_minus_alpha_prod, noisy_latents)
     
-    if noise_scheduler.config.prediction_type == "epsilon":
+    if isinstance(noise_scheduler, DDIMScheduler) or noise_scheduler.config.prediction_type == "epsilon":
         predicted_latents = (noisy_latents - sqrt_one_minus_alpha_prod * model_pred) / sqrt_alpha_prod
         #predicted_noise = model_pred
     elif noise_scheduler.config.prediction_type == "v-prediction":
