@@ -264,8 +264,8 @@ def parse_args():
     
     parser.add_argument("--weight_mse1", type=float, default=1.0, help="Weight for standard diffusion loss.")
     parser.add_argument("--weight_mse2", type=float, default=1.0, help="Weight for pseudo-DREAM loss.")
-    parser.add_argument("--weight_gan_d1", type=float, default=1.0, help="Weight for GAN discriminator loss (true samples).")
-    parser.add_argument("--weight_gan_d2", type=float, default=1.0, help="Weight for GAN discriminator loss (false samples).")
+    parser.add_argument("--weight_gan_d1", type=float, default=0.5, help="Weight for GAN discriminator loss (true samples).")
+    parser.add_argument("--weight_gan_d2", type=float, default=0.5, help="Weight for GAN discriminator loss (false samples).")
     parser.add_argument("--weight_gan_g", type=float, default=1.0, help="Weight for GAN generator loss.")
 
     args = parser.parse_args()
@@ -278,6 +278,17 @@ def parse_args():
 
     return args
 
+class UnetWrapper(torch.nn.Module):
+    def __init__(self, unet):
+        super().__init__()
+        self.unet=unet
+        self.config=unet.config
+        self.device=unet.device
+    
+    def forward(self, latents, timesteps):
+        output = self.unet(latents, timesteps)
+        output.sample = output.sample[:, :-1, :, :]
+        return output
 
 def main(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
@@ -674,11 +685,11 @@ def main(args):
                     ema_model.copy_to(unet.parameters())
 
                 pipeline = DDPMPipeline(
-                    unet=unet,
+                    unet=UnetWrapper(unet),
                     scheduler=noise_scheduler,
                 )
 
-                generator = torch.Generator(device=pipeline.device).manual_seed(0)
+                generator = torch.Generator(device=unet.device).manual_seed(0)
                 # run pipeline in inference (sample random noise and denoise)
                 images = pipeline(
                     generator=generator,
