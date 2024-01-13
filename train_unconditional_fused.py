@@ -30,7 +30,7 @@ from diffusers.utils.import_utils import is_xformers_available
 
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
-check_min_version("0.26.0.dev0")
+#check_min_version("0.26.0.dev0")
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -491,7 +491,7 @@ def main(args):
 
     # Create duplicate unet with all parameters and grads tied
     model2 = copy.deepcopy(model1)
-    for p1, p2 in zip(model1.parameters(), model2.parameters):
+    for p1, p2 in zip(model1.parameters(), model2.parameters()):
         p2.data = p1.data
         p2.grad = p1.grad = torch.zeros_like(p1.data)
 
@@ -548,6 +548,9 @@ def main(args):
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
+            
+    parameters1 = list(model1.parameters())
+    parameters2 = list(model2.parameters())
 
     # Train!
     for epoch in range(first_epoch, args.num_epochs):
@@ -574,7 +577,7 @@ def main(args):
                 # Add noise to the clean images according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 model1_input = noise_scheduler.add_noise(clean_images, noise, timesteps)
-                model1_output = model(model1_input, timesteps).sample
+                model1_output = model1(model1_input, timesteps).sample
                 # Split output into latents and discriminator prediction
                 model1_predicted_sample = model1_output[:, :-1, :, :]
                 model1_discriminator_output = model1_output[:, -1, :, :]
@@ -597,8 +600,8 @@ def main(args):
 
                 # Do two backwards passes, each only on one of the tied models. Because the
                 # gradients are tied this actually accumulates both sets of gradients together.
-                accelerator.backward(loss1, inputs=model1.parameters(), retain_graph=True)
-                accelerator.backward(loss2, inputs=model2.parameters(), retain_graph=False)
+                accelerator.backward(loss1, inputs=parameters1, retain_graph=True)
+                accelerator.backward(loss2, inputs=parameters2, retain_graph=False)
 
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model1.parameters(), 1.0)
@@ -639,10 +642,23 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
+            logs = {
+                "loss": (loss1 + loss2).detach().item(),
+                "loss_mse1": loss_mse1.detach().item(),
+                "loss_mse2": loss_mse2.detach().item(),
+                "loss_gan_d1": loss_gan_d1.detach().item(),
+                "loss_gan_d2": loss_gan_d2.detach().item(),
+                "loss_gan_g": loss_gan_g.detach().item(),
+                "lr": lr_scheduler.get_last_lr()[0],
+                "step": global_step}
+            shortlogs = {
+                "loss": (loss1 + loss2).detach().item(),
+                "loss_mse1": loss_mse1.detach().item(),
+                "lr": lr_scheduler.get_last_lr()[0],
+                "step": global_step}
             if args.use_ema:
                 logs["ema_decay"] = ema_model.cur_decay_value
-            progress_bar.set_postfix(**logs)
+            progress_bar.set_postfix(**shortlogs)
             accelerator.log(logs, step=global_step)
         progress_bar.close()
 
