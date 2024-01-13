@@ -1,4 +1,5 @@
 import argparse
+import copy
 import inspect
 import logging
 import math
@@ -260,6 +261,12 @@ def parse_args():
     parser.add_argument(
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
+    
+    parser.add_argument("--weight_mse1", type=float, default=1.0, help="Weight for standard diffusion loss.")
+    parser.add_argument("--weight_mse2", type=float, default=1.0, help="Weight for pseudo-DREAM loss.")
+    parser.add_argument("--weight_gan_d1", type=float, default=1.0, help="Weight for GAN discriminator loss (true samples).")
+    parser.add_argument("--weight_gan_d2", type=float, default=1.0, help="Weight for GAN discriminator loss (false samples).")
+    parser.add_argument("--weight_gan_g", type=float, default=1.0, help="Weight for GAN generator loss.")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -355,10 +362,10 @@ def main(args):
 
     # Initialize the model
     if args.model_config_name_or_path is None:
-        model = UNet2DModel(
+        model1 = UNet2DModel(
             sample_size=args.resolution,
             in_channels=3,
-            out_channels=3,
+            out_channels=4,
             layers_per_block=2,
             block_out_channels=(128, 128, 256, 256, 512, 512),
             down_block_types=(
@@ -385,13 +392,13 @@ def main(args):
     # Create EMA for the model.
     if args.use_ema:
         ema_model = EMAModel(
-            model.parameters(),
+            model1.parameters(),
             decay=args.ema_max_decay,
             use_ema_warmup=True,
             inv_gamma=args.ema_inv_gamma,
             power=args.ema_power,
             model_cls=UNet2DModel,
-            model_config=model.config,
+            model_config=model1.config,
         )
 
     weight_dtype = torch.float32
@@ -411,7 +418,7 @@ def main(args):
                 logger.warn(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
-            model.enable_xformers_memory_efficient_attention()
+            model1.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
@@ -428,7 +435,7 @@ def main(args):
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        model1.parameters(),
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -482,9 +489,15 @@ def main(args):
         num_training_steps=(len(train_dataloader) * args.num_epochs),
     )
 
+    # Create duplicate unet with all parameters and grads tied
+    model2 = copy.deepcopy(model1)
+    for p1, p2 in zip(model1.parameters(), model2.parameters):
+        p2.data = p1.data
+        p2.grad = p1.grad = torch.zeros_like(p1.data)
+
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model1, model2, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model1, model2, optimizer, train_dataloader, lr_scheduler
     )
 
     if args.use_ema:
@@ -538,7 +551,7 @@ def main(args):
 
     # Train!
     for epoch in range(first_epoch, args.num_epochs):
-        model.train()
+        model1.train()
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
@@ -557,31 +570,38 @@ def main(args):
                 0, noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
             ).long()
 
-            # Add noise to the clean images according to the noise magnitude at each timestep
-            # (this is the forward diffusion process)
-            noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+            with accelerator.accumulate(model1):
+                # Add noise to the clean images according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                model1_input = noise_scheduler.add_noise(clean_images, noise, timesteps)
+                model1_output = model(model1_input, timesteps).sample
+                # Split output into latents and discriminator prediction
+                model1_predicted_sample = model1_output[:, :-1, :, :]
+                model1_discriminator_output = model1_output[:, -1, :, :]
 
-            with accelerator.accumulate(model):
-                # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample
+                # Add the same noise to the model outputs again
+                model2_input = noise_scheduler.add_noise(model1_predicted_sample, noise, timesteps)
+                model2_output = model2(model2_input, timesteps).sample
+                # Split output into latents and discriminator prediction
+                model2_predicted_sample = model2_output[:, :-1, :, :]
+                model2_discriminator_output = model2_output[:, -1, :, :]
 
-                if args.prediction_type == "epsilon":
-                    loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!
-                elif args.prediction_type == "sample":
-                    alpha_t = _extract_into_tensor(
-                        noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
-                    )
-                    snr_weights = alpha_t / (1 - alpha_t)
-                    # use SNR weighting from distillation paper
-                    loss = snr_weights * F.mse_loss(model_output.float(), clean_images.float(), reduction="none")
-                    loss = loss.mean()
-                else:
-                    raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
+                loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
+                loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
+                loss_gan_d1 = F.binary_cross_entropy_with_logits(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_gan_d2 = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_gan_g = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
 
-                accelerator.backward(loss)
+                loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g
+                loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
+
+                # Do two backwards passes, each only on one of the tied models. Because the
+                # gradients are tied this actually accumulates both sets of gradients together.
+                accelerator.backward(loss1, inputs=model1.parameters(), retain_graph=True)
+                accelerator.backward(loss2, inputs=model2.parameters(), retain_graph=False)
 
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                    accelerator.clip_grad_norm_(model1.parameters(), 1.0)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -589,7 +609,7 @@ def main(args):
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 if args.use_ema:
-                    ema_model.step(model.parameters())
+                    ema_model.step(model1.parameters())
                 progress_bar.update(1)
                 global_step += 1
 
@@ -631,7 +651,7 @@ def main(args):
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
             if epoch % args.save_images_epochs == 0 or epoch == args.num_epochs - 1:
-                unet = accelerator.unwrap_model(model)
+                unet = accelerator.unwrap_model(model1)
 
                 if args.use_ema:
                     ema_model.store(unet.parameters())
@@ -672,7 +692,7 @@ def main(args):
 
             if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
                 # save the model
-                unet = accelerator.unwrap_model(model)
+                unet = accelerator.unwrap_model(model1)
 
                 if args.use_ema:
                     ema_model.store(unet.parameters())
