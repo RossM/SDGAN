@@ -495,14 +495,16 @@ def main(args):
 
     # Create duplicate unet with all parameters and grads tied
     model2 = copy.deepcopy(model1)
-    for p1, p2 in zip(model1.parameters(), model2.parameters()):
-        p2.data = p1.data
-        p2.grad = p1.grad = torch.zeros_like(p1.data)
 
     # Prepare everything with our `accelerator`.
     model1, model2, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model1, model2, optimizer, train_dataloader, lr_scheduler
     )
+
+    with torch.no_grad():
+        for p1, p2 in zip(model1.parameters(), model2.parameters()):
+            p2.set_(p1)
+            p2.grad = p1.grad = torch.zeros_like(p1.data)
 
     if args.use_ema:
         ema_model.to(accelerator.device)
@@ -555,6 +557,8 @@ def main(args):
             
     parameters1 = list(model1.parameters())
     parameters2 = list(model2.parameters())
+    assert parameters1[0].is_set_to(parameters2[0])
+    assert parameters1[0].grad is parameters2[0].grad
 
     # Train!
     for epoch in range(first_epoch, args.num_epochs):
@@ -606,6 +610,9 @@ def main(args):
                 # gradients are tied this actually accumulates both sets of gradients together.
                 accelerator.backward(loss1, inputs=parameters1, retain_graph=True)
                 accelerator.backward(loss2, inputs=parameters2, retain_graph=False)
+
+                assert parameters1[0].is_set_to(parameters2[0])
+                assert parameters1[0].grad is parameters2[0].grad
 
                 if accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model1.parameters(), 1.0)
