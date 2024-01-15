@@ -257,6 +257,7 @@ def parse_args():
     
     parser.add_argument("--weight_mse1", type=float, default=1.0, help="Weight for standard diffusion loss.")
     parser.add_argument("--weight_mse2", type=float, default=1.0, help="Weight for pseudo-DREAM loss.")
+    parser.add_argument("--weight_cons", type=float, default=0.0, help="Weight for consistency loss.")
     parser.add_argument("--weight_gan_d1", type=float, default=0.5, help="Weight for GAN discriminator loss (true samples).")
     parser.add_argument("--weight_gan_d2", type=float, default=0.5, help="Weight for GAN discriminator loss (false samples).")
     parser.add_argument("--weight_gan_g", type=float, default=1.0, help="Weight for GAN generator loss.")
@@ -599,11 +600,12 @@ def main(args):
 
                 loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
                 loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
+                loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="mean")
                 loss_gan_d1 = F.binary_cross_entropy_with_logits(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="mean")
                 loss_gan_d2 = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
                 loss_gan_g = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
 
-                loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g
+                loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g + args.weight_cons * loss_cons
                 loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
 
                 # Do two backwards passes, each only on one of the tied models. Because the
@@ -657,6 +659,8 @@ def main(args):
                 "loss": (loss1 + loss2).detach().item(),
                 "loss_mse1": loss_mse1.detach().item(),
                 "loss_mse2": loss_mse2.detach().item(),
+                "loss_cons": loss_cons.detach().item(),
+                "loss_gan_d": ((loss_gan_d1 + loss_gan_d2) / 2).detach().item(),
                 "loss_gan_d1": loss_gan_d1.detach().item(),
                 "loss_gan_d2": loss_gan_d2.detach().item(),
                 "loss_gan_g": loss_gan_g.detach().item(),
