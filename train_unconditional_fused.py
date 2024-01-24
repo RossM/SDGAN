@@ -261,6 +261,7 @@ def parse_args():
     parser.add_argument("--weight_gan_d1", type=float, default=0.5, help="Weight for GAN discriminator loss (true samples).")
     parser.add_argument("--weight_gan_d2", type=float, default=0.5, help="Weight for GAN discriminator loss (false samples).")
     parser.add_argument("--weight_gan_g", type=float, default=1.0, help="Weight for GAN generator loss.")
+    parser.add_argument("--resample_noise", action="store_true", help="Whether to use new noise for unet2.")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -590,6 +591,9 @@ def main(args):
                 # Split output into latents and discriminator prediction
                 model1_predicted_sample = model1_output[:, :-1, :, :]
                 model1_discriminator_output = model1_output[:, -1, :, :]
+
+                if args.resample_noise:
+                    noise = torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device)
 
                 # Add the same noise to the model outputs again
                 model2_input = noise_scheduler.add_noise(model1_predicted_sample, noise, timesteps)
