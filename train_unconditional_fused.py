@@ -271,6 +271,8 @@ def parse_args():
     parser.add_argument("--weight_gan_d2", type=float, default=0.5, help="Weight for GAN discriminator loss (false samples).")
     parser.add_argument("--weight_gan_g", type=float, default=1.0, help="Weight for GAN generator loss.")
     parser.add_argument("--resample_noise", action="store_true", help="Whether to use new noise for unet2.")
+    parser.add_argument("--resample_timesteps", action="store_true", help="Whether to use new timesteps for unet2.")
+    parser.add_argument("--lsgan", action="store_true", help="Use least-squares loss for GAN.")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -603,6 +605,10 @@ def main(args):
 
                 if args.resample_noise:
                     noise = torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device)
+                if args.resample_timesteps:
+                    timesteps = torch.randint(
+                        0, noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
+                    ).long()
 
                 # Add the same noise to the model outputs again
                 model2_input = noise_scheduler.add_noise(model1_predicted_sample, noise, timesteps)
@@ -611,12 +617,17 @@ def main(args):
                 model2_predicted_sample = model2_output[:, :-1, :, :]
                 model2_discriminator_output = model2_output[:, -1, :, :]
 
+                if args.lsgan:
+                    gan_loss_fn = F.mse_loss
+                else:
+                    gan_loss_fn = F.binary_cross_entropy_with_logits
+
                 loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
                 loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
                 loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="mean")
-                loss_gan_d1 = F.binary_cross_entropy_with_logits(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="mean")
-                loss_gan_d2 = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
-                loss_gan_g = F.binary_cross_entropy_with_logits(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_gan_d1 = gan_loss_fn(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_gan_d2 = gan_loss_fn(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_gan_g = gan_loss_fn(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
 
                 loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g + args.weight_cons * loss_cons
                 loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
