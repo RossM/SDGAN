@@ -624,8 +624,8 @@ def main(args):
                     gan_loss_fn = F.binary_cross_entropy_with_logits
                     
                 if args.gan_mean:
-                    model1_discriminator_output = model1_discriminator_output.mean(dims=(-1, -2))
-                    model2_discriminator_output = model2_discriminator_output.mean(dims=(-1, -2))
+                    model1_discriminator_output = model1_discriminator_output.mean(dim=(-1, -2))
+                    model2_discriminator_output = model2_discriminator_output.mean(dim=(-1, -2))
 
                 loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
                 loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
