@@ -273,6 +273,7 @@ def parse_args():
     parser.add_argument("--resample_noise", action="store_true", help="Whether to use new noise for unet2.")
     parser.add_argument("--resample_timesteps", action="store_true", help="Whether to use new timesteps for unet2.")
     parser.add_argument("--lsgan", action="store_true", help="Use least-squares loss for GAN.")
+    parser.add_argument("--gan_mean", action="store_true", help="Take mean before calculating GAN losses.")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -621,6 +622,10 @@ def main(args):
                     gan_loss_fn = F.mse_loss
                 else:
                     gan_loss_fn = F.binary_cross_entropy_with_logits
+                    
+                if args.gan_mean
+                    model1_discriminator_output = model1_discriminator_output.mean(dims=(-1, -2))
+                    model2_discriminator_output = model2_discriminator_output.mean(dims=(-1, -2))
 
                 loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
                 loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
