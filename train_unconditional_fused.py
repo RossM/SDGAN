@@ -623,7 +623,7 @@ def main(args):
                 else:
                     gan_loss_fn = F.binary_cross_entropy_with_logits
                     
-                if args.gan_mean
+                if args.gan_mean:
                     model1_discriminator_output = model1_discriminator_output.mean(dims=(-1, -2))
                     model2_discriminator_output = model2_discriminator_output.mean(dims=(-1, -2))
 
