@@ -591,7 +591,7 @@ def main(args):
                         delta_pred = (noise - model_pred).detach()
                         
                         if args.dream_adaptation != None:
-                            delta_pred = torch.randn_like(delta_pred) * delta_pred.mean(dim=(-1,-2), keepdim=True)
+                            delta_pred = torch.randn_like(delta_pred) * (delta_pred ** 2).mean(dim=(-1,-2), keepdim=True) ** 0.5
 
                     else:
                         delta_pred = torch.zeros_like(noisy_images)
