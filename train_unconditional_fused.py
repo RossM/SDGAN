@@ -607,13 +607,15 @@ def main(args):
                 if args.resample_noise:
                     noise = torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device)
                 if args.resample_timesteps:
-                    timesteps = torch.randint(
+                    timesteps2 = torch.randint(
                         0, noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
                     ).long()
+                else:
+                    timesteps2 = timesteps
 
                 # Add the same noise to the model outputs again
-                model2_input = noise_scheduler.add_noise(model1_predicted_sample, noise, timesteps)
-                model2_output = model2(model2_input, timesteps).sample
+                model2_input = noise_scheduler.add_noise(model1_predicted_sample, noise, timesteps2)
+                model2_output = model2(model2_input, timesteps2).sample
                 # Split output into latents and discriminator prediction
                 model2_predicted_sample = model2_output[:, :-1, :, :]
                 model2_discriminator_output = model2_output[:, -1, :, :]
