@@ -577,22 +577,24 @@ def main(args):
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
 
             with accelerator.accumulate(model):
-                if args.use_dream:
-                    with torch.no_grad():
-                        alpha_prod = noise_scheduler.alphas_cumprod.to(timesteps.device)[timesteps, None, None, None]
-                        sqrt_alpha_prod = alpha_prod ** 0.5
-                        sqrt_one_minus_alpha_prod = (1 - alpha_prod) ** 0.5
-                        dream_lambda = sqrt_one_minus_alpha_prod
+                with torch.no_grad():
+                    alpha_prod = noise_scheduler.alphas_cumprod.to(timesteps.device)[timesteps, None, None, None]
+                    sqrt_alpha_prod = alpha_prod ** 0.5
+                    sqrt_one_minus_alpha_prod = (1 - alpha_prod) ** 0.5
+                    dream_lambda = sqrt_one_minus_alpha_prod
                         
+                    if args.use_dream:
                         # Assuming epsilon prediction
                         model_pred = model(noisy_images, timesteps).sample
                         delta_pred = (noise - model_pred).detach()
+                    else:
+                        delta_pred = torch.zeros_like(noisy_images)
                         
-                        delta_pred.add_(args.dream_extra_noise * torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device))
+                    delta_pred.add_(args.dream_extra_noise * torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device))
 
-                        delta_pred.mul_(dream_lambda)
-                        noisy_images.add_(sqrt_one_minus_alpha_prod * delta_pred)
-                        noise.add_(delta_pred)
+                    delta_pred.mul_(dream_lambda)
+                    noisy_images.add_(sqrt_one_minus_alpha_prod * delta_pred)
+                    noise.add_(delta_pred)
 
                 # Predict the noise residual
                 model_output = model(noisy_images, timesteps).sample
