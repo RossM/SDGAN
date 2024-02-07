@@ -273,6 +273,8 @@ def parse_args():
     parser.add_argument("--use_dream", action="store_true", help="")
     parser.add_argument("--dream_extra_noise", type=float, default=0.0, help="")
     parser.add_argument("--noise_mult", type=float, default=1.0, help="")
+    parser.add_argument("--dream_p", type=float, default=1.0, help="")
+    parser.add_argument("--dream_adaptation", type=float, default=None, help="")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -581,12 +583,16 @@ def main(args):
                     alpha_prod = noise_scheduler.alphas_cumprod.to(timesteps.device)[timesteps, None, None, None]
                     sqrt_alpha_prod = alpha_prod ** 0.5
                     sqrt_one_minus_alpha_prod = (1 - alpha_prod) ** 0.5
-                    dream_lambda = sqrt_one_minus_alpha_prod
+                    dream_lambda = sqrt_one_minus_alpha_prod ** args.dream_p
                         
                     if args.use_dream:
                         # Assuming epsilon prediction
                         model_pred = model(noisy_images, timesteps).sample
                         delta_pred = (noise - model_pred).detach()
+                        
+                        if args.dream_adaptation != None:
+                            delta_pred = torch.randn_like(delta_pred) * delta_pred.mean(dim=(-1,-2), keepdim=True)
+
                     else:
                         delta_pred = torch.zeros_like(noisy_images)
                         
