@@ -647,7 +647,7 @@ def main(args):
 
                 if args.softsnr:
                     loss1 = loss1 * get_snr_weight(noise_scheduler, timesteps)
-                    loss2 = loss2 * get_snr_weight(noise_scheduler, timesteps)
+                    loss2 = loss2 * get_snr_weight(noise_scheduler, timesteps2)
                 
                 loss1 = loss1.mean()
                 loss2 = loss2.mean()
