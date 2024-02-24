@@ -630,12 +630,12 @@ def main(args):
                     model1_discriminator_output = model1_discriminator_output.mean(dim=(-1, -2))
                     model2_discriminator_output = model2_discriminator_output.mean(dim=(-1, -2))
 
-                loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="none").mean(dim=1:)
-                loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="none").mean(dim=1:)
-                loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="none").mean(dim=1:)
-                loss_gan_d1 = gan_loss_fn(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="none").mean(dim=1:)
-                loss_gan_d2 = gan_loss_fn(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="none").mean(dim=1:)
-                loss_gan_g = gan_loss_fn(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="none").mean(dim=1:)
+                loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="none").mean(dim=(1,2,3))
+                loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="none").mean(dim=(1,2,3))
+                loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="none").mean(dim=(1,2,3))
+                loss_gan_d1 = gan_loss_fn(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="none").mean(dim=(1,2))
+                loss_gan_d2 = gan_loss_fn(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="none").mean(dim=(1,2))
+                loss_gan_g = gan_loss_fn(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="none").mean(dim=(1,2))
 
                 loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g + args.weight_cons * loss_cons
                 loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
