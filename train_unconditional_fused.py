@@ -274,6 +274,7 @@ def parse_args():
     parser.add_argument("--resample_timesteps", action="store_true", help="Whether to use new timesteps for unet2.")
     parser.add_argument("--lsgan", action="store_true", help="Use least-squares loss for GAN.")
     parser.add_argument("--gan_mean", action="store_true", help="Take mean before calculating GAN losses.")
+    parser.add_argument("--softsnr", action="store_true", help="Use soft SNR weighting.")
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -629,15 +630,26 @@ def main(args):
                     model1_discriminator_output = model1_discriminator_output.mean(dim=(-1, -2))
                     model2_discriminator_output = model2_discriminator_output.mean(dim=(-1, -2))
 
-                loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="mean")
-                loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="mean")
-                loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="mean")
-                loss_gan_d1 = gan_loss_fn(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="mean")
-                loss_gan_d2 = gan_loss_fn(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
-                loss_gan_g = gan_loss_fn(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="mean")
+                loss_mse1 = F.mse_loss(model1_predicted_sample.float(), clean_images.float(), reduction="none")
+                loss_mse2 = F.mse_loss(model2_predicted_sample.float(), clean_images.float(), reduction="none")
+                loss_cons = F.mse_loss(model1_predicted_sample.float(), model2_predicted_sample.float().detach(), reduction="none")
+                loss_gan_d1 = gan_loss_fn(model1_discriminator_output.float(), torch.ones_like(model1_discriminator_output,dtype=torch.float), reduction="none")
+                loss_gan_d2 = gan_loss_fn(model2_discriminator_output.float(), torch.zeros_like(model2_discriminator_output,dtype=torch.float), reduction="none")
+                loss_gan_g = gan_loss_fn(model2_discriminator_output.float(), torch.ones_like(model2_discriminator_output,dtype=torch.float), reduction="none")
 
                 loss1 = args.weight_mse1 * loss_mse1 + args.weight_gan_d1 * loss_gan_d1 + args.weight_gan_g * loss_gan_g + args.weight_cons * loss_cons
                 loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
+
+                def get_snr_weight(noise_scheduler, timesteps):
+                    snr = (noise_scheduler.alphas_cumprod / (1 - noise_scheduler.alphas_cumprod)) ** 0.5
+                    return 5 * snr[timesteps] / (5 + snr(timesteps))
+
+                if args.softsnr:
+                    loss1 = loss1 * get_snr_weight(noise_scheduler, timesteps)
+                    loss2 = loss2 * get_snr_weight(noise_scheduler, timesteps)
+                
+                loss1 = loss1.mean()
+                loss2 = loss2.mean()
 
                 # Do two backwards passes, each only on one of the tied models. Because the
                 # gradients are tied this actually accumulates both sets of gradients together.
