@@ -641,7 +641,8 @@ def main(args):
                 loss2 = args.weight_mse2 * loss_mse2 + args.weight_gan_d2 * loss_gan_d2
 
                 def get_snr_weight(noise_scheduler, timesteps):
-                    snr = (noise_scheduler.alphas_cumprod / (1 - noise_scheduler.alphas_cumprod)) ** 0.5
+                    alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
+                    snr = alphas_cumprod / (1 - alphas_cumprod)
                     return 5 * snr[timesteps] / (5 + snr(timesteps))
 
                 if args.softsnr:
