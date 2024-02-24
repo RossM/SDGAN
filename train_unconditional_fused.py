@@ -643,7 +643,7 @@ def main(args):
                 def get_snr_weight(noise_scheduler, timesteps):
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(timesteps.device)
                     snr = alphas_cumprod / (1 - alphas_cumprod)
-                    return 5 * snr[timesteps] / (5 + snr(timesteps))
+                    return 5 * snr[timesteps] / (5 + snr[timesteps])
 
                 if args.softsnr:
                     loss1 = loss1 * get_snr_weight(noise_scheduler, timesteps)
