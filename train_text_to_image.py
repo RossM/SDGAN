@@ -18,12 +18,13 @@ import logging
 import math
 import os
 import random
+from re import S
 import shutil
-import json
 from pathlib import Path
 
 import accelerate
 import datasets
+import k_diffusion.sampling
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -48,8 +49,7 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
-import discriminator, trainer_util
-from discriminator import Discriminator2D
+import trainer_util
 from trainer_util import *
 
 if is_wandb_available():
@@ -69,28 +69,17 @@ DATASET_NAME_MAPPING = {
 def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight_dtype, epoch):
     logger.info("Running validation... ")
 
-    if not args.ldm:
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path,
-            vae=vae,
-            text_encoder=text_encoder,
-            tokenizer=tokenizer,
-            unet=accelerator.unwrap_model(unet),
-            safety_checker=None,
-            revision=args.revision,
-            torch_dtype=weight_dtype,
-            requires_safety_checker=False,
-        )
-    else:
-        pipeline = StableDiffusionPipeline.from_pretrained(
-            args.pretrained_model_name_or_path,
-            vqvae=vae,
-            unet=accelerator.unwrap_model(unet),
-            safety_checker=None,
-            revision=args.revision,
-            torch_dtype=weight_dtype,
-            requires_safety_checker=False,
-        )
+    pipeline = StableDiffusionPipeline.from_pretrained(
+        args.pretrained_model_name_or_path,
+        vae=vae,
+        text_encoder=text_encoder,
+        tokenizer=tokenizer,
+        unet=accelerator.unwrap_model(unet),
+        safety_checker=None,
+        revision=args.revision,
+        torch_dtype=weight_dtype,
+        requires_safety_checker=False,
+    )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
@@ -549,6 +538,14 @@ def main():
         unet = UNet2DConditionModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
         )
+        try:
+            discriminator = UNet2DConditionModel.from_pretrained(
+                args.pretrained_model_name_or_path, subfolder="discriminator", revision=args.non_ema_revision
+            )
+        except:
+            discriminator = UNet2DConditionModel.from_pretrained(
+                args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+            )
     else:
         noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
         tokenizer = None
@@ -557,24 +554,20 @@ def main():
         unet = UNet2DModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
         )
+        try:
+            discriminator = UNet2DModel.from_pretrained(
+                args.pretrained_model_name_or_path, subfolder="discriminator", revision=args.non_ema_revision
+            )
+        except:
+            discriminator = UNet2DModel.from_pretrained(
+                args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+            )
         
-    try:
-        discriminator = Discriminator2D.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="discriminator"
-        )
-    except:
-        with open(args.discriminator_config, "r") as f:
-            discriminator_config = json.load(f)
-        discriminator = Discriminator2D.from_config(discriminator_config)
-
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
     if not args.ldm:
         text_encoder.requires_grad_(False)
     
-    # Freeze discriminator (it will be unfrozen as needed)
-    discriminator.requires_grad_(False)
-
     # Create EMA for the unet.
     if args.use_ema:
         ema_unet = UNet2DConditionModel.from_pretrained(
@@ -931,7 +924,6 @@ def main():
     if accelerator.is_main_process:
         tracker_config = dict(vars(args))
         tracker_config.pop("validation_prompts")
-        tracker_config["discriminator_config_data"] = discriminator.config
         accelerator.init_trackers(args.tracker_project_name, tracker_config)
 
     # Train!
@@ -976,6 +968,16 @@ def main():
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps + (resume_step if args.resume_from_checkpoint else 0)), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
+    
+    # TODO: Need sampler class that unwraps the .sample from diffusers's unet
+
+    sampler = k_diffusion.external.DiscreteEpsDDPMDenoiser(unet, noise_scheduler.alphas_cumprod, False)
+    sigmas = sampler.get_sigmas(args.sampling_steps)
+
+    @torch.no_grad()
+    def sampling_loop(sigmas: Tensor, sampling_steps: int, encoder_hidden_states: Tensor):
+        # TODO
+        assert(False)
 
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
@@ -988,149 +990,73 @@ def main():
                 continue
 
             with accelerator.accumulate(unet):
-                # Convert images to latent space
+                # Get the text embedding for conditioning
+                if not args.ldm:
+                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                else:
+                    encoder_hidden_states = torch.empty([0, 0, 0])
+                    
+                # Sample fake images
+                input_latents, samples = sampling_loop(sigmas, args.sampling_steps, encoder_hidden_states)
+
+                # Convert real images to latent space
                 if not args.ldm:
                     latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
                     latents = latents * vae.config.scaling_factor
                 else:
                     latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
 
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                if args.noise_offset:
-                    # https://www.crosslabs.org//blog/diffusion-with-offset-noise
-                    noise += args.noise_offset * torch.randn(
-                        (latents.shape[0], latents.shape[1], 1, 1), device=latents.device
-                    )
-
                 bsz = latents.shape[0]
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-                timesteps = timesteps.long()
+                zero_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
 
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+                # Get discriminator losses
+                discriminator_output = discriminator(samples, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                loss_d_fake = F.binary_cross_entropy_with_logits(discriminator_output, torch.zeros_like(discriminator_output))
+                loss_d_fake.backward()
 
-                # Get the text embedding for conditioning
-                if not args.ldm:
-                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                discriminator_output = discriminator(latents, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                loss_d_real = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+                loss_d_real.backward()
+
+                # Discriminator optimization step
+                optimizer_discriminator.step()
+                optimizer_discriminator.zero_grad()
+                lr_scheduler_discriminator.step()
+
+                # Get generator loss
+                samples.requires_grad = True
+                discriminator_output = discriminator(samples, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+
+                # Get gradient of generator loss with respect to the sample
+                loss_g.backward(inputs=(samples,))
+
+                # Do sample forward pass again, this time with gradient information
+                sample_steps = torch.randint(0, args.sampling_steps, (bsz,), device=latents.device)
+                timesteps = sampler.sigma_to_t(sigmas[sample_steps])
+                generator_output = unet(input_latents[sample_steps], timesteps, encoder_hidden_states).sample
+
+                # Use the sample gradient to approximate the effect of one sampling step on the final output
+                if noise_scheduler.config.prediction_type == "sample":
+                    generator_output.backward(samples.grad.detach())
                 else:
-                    encoder_hidden_states = torch.empty([0, 0, 0])
+                    generator_output.backward(-samples.grad.detach())
 
-                # Get the target for loss depending on the prediction type
-                if isinstance(noise_scheduler, DDIMScheduler) or noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-
-                # Predict the noise residual
-                if not args.ldm:
-                    model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-                else:
-                    model_pred = unet(noisy_latents, timesteps).sample
-
-                # Unfreeze discriminator for discriminator step
-                discriminator.requires_grad_(True)
-
-                # Train discriminator
-                discriminator_input, next_timesteps = discriminator.get_input(
-                    noise_scheduler=noise_scheduler,
-                    noisy_latents=noisy_latents,
-                    model_pred=torch.cat((target, model_pred), 0),
-                    timesteps=timesteps,
-                    noise=noise,
-                )
-                discriminator_input.detach_()
-                discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states.repeat(2, 1, 1))
-                discriminator_target = torch.cat((torch.ones(bsz, 1, device=accelerator.device), torch.zeros(bsz, 1, device=accelerator.device)), 0)
-                discriminator_loss = F.mse_loss(discriminator_pred, discriminator_target, reduction="mean")
+                # Generator optimization step
+                optimizer.step()
+                optimizer.zero_grad()
+                lr_scheduler.step()
                 
-                avg_discriminator_loss = accelerator.gather(discriminator_loss.repeat(args.train_batch_size)).mean()
+                avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
+                avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
+                avg_loss_g = accelerator.gather(loss_g.repeat(args.train_batch_size)).mean().detach()
                 
-                # If discriminator loss goes too low, training may be unstable. Freeze the discriminator to
-                # allow the generator to catch up.
-                if avg_discriminator_loss >= args.stabilize_d:
-                    accelerator.backward(discriminator_loss)
-                    if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
-                        accelerator.clip_grad_norm_(discriminator.parameters(), args.max_grad_norm)
-                    optimizer_discriminator.step()
-                    if global_step % 10 == 0:
-                        log_grad_norm("discriminator", discriminator, accelerator, global_step)
-                    optimizer_discriminator.zero_grad()
-                    if args.lr_scheduler == "auto":
-                        lr_scheduler_discriminator.step(avg_discriminator_loss)
-                    else:
-                        lr_scheduler_discriminator.step()
-                del discriminator_input, discriminator_pred, discriminator_target, discriminator_loss
-                avg_discriminator_loss.detach_()
-                
-                # Freeze discriminator again for unet step
-                discriminator.requires_grad_(False)
-
-                if not args.freeze_unet:
-                    # Compute normal diffusion loss
-                    mse_loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                    # Compute GAN loss
-                    discriminator_input, next_timesteps = torch.utils.checkpoint.checkpoint(Discriminator2D.get_input,
-                        discriminator,
-                        noise_scheduler,
-                        noisy_latents,
-                        model_pred,
-                        timesteps,
-                        noise,
-                    )
-                    discriminator_pred = discriminator(discriminator_input, next_timesteps, encoder_hidden_states)
-                    gan_loss = F.mse_loss(discriminator_pred, torch.ones_like(discriminator_pred), reduction="mean")
-                    del discriminator_input, discriminator_pred
-                    
-                    # Compute total loss
-                    loss = mse_loss + args.gan_weight * gan_loss
-                    avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                    avg_gan_loss = accelerator.gather(gan_loss.repeat(args.train_batch_size)).mean()
-                    avg_mse_loss = accelerator.gather(mse_loss.repeat(args.train_batch_size)).mean()
-                    
-                    # If training starts divering, restore parameters from ema
-                    if args.use_ema and avg_mse_loss > 0.5:
-                        ema_unet.copy_to(unet.parameters)
-
-                    # If generator loss goes too low, training may be unstable. Freeze the generator
-                    # to allow the discriminator to catch up.
-                    elif avg_gan_loss >= args.stabilize_g:
-
-                        # Gather the losses across all processes for logging (if we use distributed training).
-                        #avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-                        #train_loss += avg_loss.item() / args.gradient_accumulation_steps
-
-                        # Backpropagate
-                        accelerator.backward(loss)
-                        if accelerator.sync_gradients and not args.use_lion and not args.use_scram:
-                            accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm)
-                        optimizer.step()
-                        if global_step % 10 == 0:
-                            log_grad_norm("unet", unet, accelerator, global_step)
-                        optimizer.zero_grad()
-                        
-                        if args.lr_scheduler == "auto":
-                            lr_scheduler.step(avg_loss)
-                        else:
-                            lr_scheduler.step()
-
-                    del model_pred, mse_loss, gan_loss, loss, avg_loss
-                    avg_mse_loss.detach_()
-                    avg_gan_loss.detach_()
-
             logs = {
-                "d_loss": avg_discriminator_loss.item(),
+                "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
+                "g_loss": avg_loss_g.item(),
                 "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
+                "g_lr": lr_scheduler.get_last_lr()[0]
             }
-            if not args.freeze_unet:
-                logs["mse_loss"] = avg_mse_loss.item()
-                logs["gan_loss"] = avg_gan_loss.item()
-                logs["g_lr"] = lr_scheduler.get_last_lr()[0]
             progress_bar.set_postfix(**logs)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
