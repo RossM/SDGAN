@@ -700,19 +700,19 @@ def main(args):
                         logger.info(f"Saved state to {save_path}")
 
             logs = {
-                "loss": (loss1 + loss2).detach().item(),
-                "loss_mse1": loss_mse1.detach().item(),
-                "loss_mse2": loss_mse2.detach().item(),
-                "loss_cons": loss_cons.detach().item(),
-                "loss_gan_d": ((loss_gan_d1 + loss_gan_d2) / 2).detach().item(),
-                "loss_gan_d1": loss_gan_d1.detach().item(),
-                "loss_gan_d2": loss_gan_d2.detach().item(),
-                "loss_gan_g": loss_gan_g.detach().item(),
+                "loss": (loss1 + loss2).detach().mean().item(),
+                "loss_mse1": loss_mse1.detach().mean().item(),
+                "loss_mse2": loss_mse2.detach().mean().item(),
+                "loss_cons": loss_cons.detach().mean().item(),
+                "loss_gan_d": ((loss_gan_d1 + loss_gan_d2) / 2).detach().mean().item(),
+                "loss_gan_d1": loss_gan_d1.detach().mean().item(),
+                "loss_gan_d2": loss_gan_d2.detach().mean().item(),
+                "loss_gan_g": loss_gan_g.detach().mean().item(),
                 "lr": lr_scheduler.get_last_lr()[0],
                 "step": global_step}
             shortlogs = {
-                "loss": (loss1 + loss2).detach().item(),
-                "loss_mse1": loss_mse1.detach().item(),
+                "loss": (loss1 + loss2).detach().mean().item(),
+                "loss_mse1": loss_mse1.detach().mean().item(),
                 "lr": lr_scheduler.get_last_lr()[0],
                 "step": global_step}
             if args.use_ema:
