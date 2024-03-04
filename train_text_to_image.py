@@ -18,13 +18,11 @@ import logging
 import math
 import os
 import random
-from re import S
 import shutil
 from pathlib import Path
 
 import accelerate
 import datasets
-import k_diffusion.sampling
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -969,16 +967,45 @@ def main():
     progress_bar = tqdm(range(global_step, args.max_train_steps + (resume_step if args.resume_from_checkpoint else 0)), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
-    # TODO: Need sampler class that unwraps the .sample from diffusers's unet
-
-    sampler = k_diffusion.external.DiscreteEpsDDPMDenoiser(unet, noise_scheduler.alphas_cumprod, False)
-    sigmas = sampler.get_sigmas(args.sampling_steps)
+    uncond_encoder_hidden_states = text_encoder("")[0]
+    noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
-    def sampling_loop(sigmas: Tensor, sampling_steps: int, encoder_hidden_states: Tensor):
-        # TODO
-        assert(False)
+    def sampling_loop(sampling_steps: int, encoder_hidden_states: Tensor, negative_encoder_hidden_states: Tensor):
+        batch_size = encoder_hidden_states.shape[0]
+        device = encoder_hidden_states.device
+        
+        # Pick a guidance scale for each sample. We use a random guidance scale to make things more robust
+        guidance_scale = torch.rand((batch_size, 1, 1, 1), device=device) * 5.0 + 5.0
+        
+        prompt_embeds = torch.cat([encoder_hidden_states, uncond_encoder_hidden_states])
+        
+        # Get timesteps for the sampling loop
+        noise_scheduler.set_timesteps(sampling_steps, device=device)
+        timesteps = noise_scheduler.timesteps
+        
+        # Get random initial latents
+        latents_size = (batch_size, unet.config.n_channels, args.resolution / 8, args.resolution / 8)
+        latents = torch.randn(latents_size, device=device)
+        latents = latents * noise_scheduler.init_noise_sigma
 
+        input_latents = torch.zeros((sampling_steps, *latents_size), device=device)
+        
+        # Sampling loop
+        for i, t in enumerate(timesteps):
+            input_latents[i] = latents
+            
+            latent_model_input = torch.cat([latents, latents])
+            latent_model_input = noise_scheduler.scale_model_input(latent_model_input, t)
+            
+            noise_pred = unet(latent_model_input, t, prompt_embeds).sample
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = guidance_scale * noise_pred_text + (1 - guidance_scale) * noise_pred_uncond
+            
+            latents = noise_scheduler.step(noise_pred, t, latents).prev_sample
+
+        return input_latents, timesteps, latents
+        
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         train_loss = 0.0
@@ -997,7 +1024,7 @@ def main():
                     encoder_hidden_states = torch.empty([0, 0, 0])
                     
                 # Sample fake images
-                input_latents, samples = sampling_loop(sigmas, args.sampling_steps, encoder_hidden_states)
+                input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states, negative_encoder_hidden_states)
 
                 # Convert real images to latent space
                 if not args.ldm:
@@ -1033,8 +1060,7 @@ def main():
 
                 # Do sample forward pass again, this time with gradient information
                 sample_steps = torch.randint(0, args.sampling_steps, (bsz,), device=latents.device)
-                timesteps = sampler.sigma_to_t(sigmas[sample_steps])
-                generator_output = unet(input_latents[sample_steps], timesteps, encoder_hidden_states).sample
+                generator_output = unet(input_latents[sample_steps], timesteps[sample_steps], encoder_hidden_states).sample
 
                 # Use the sample gradient to approximate the effect of one sampling step on the final output
                 if noise_scheduler.config.prediction_type == "sample":
