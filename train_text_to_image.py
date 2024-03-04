@@ -971,7 +971,7 @@ def main():
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
-    def sampling_loop(sampling_steps: int, encoder_hidden_states: Tensor, negative_encoder_hidden_states: Tensor):
+    def sampling_loop(sampling_steps: int, encoder_hidden_states: Tensor):
         batch_size = encoder_hidden_states.shape[0]
         device = encoder_hidden_states.device
         
@@ -1024,7 +1024,7 @@ def main():
                     encoder_hidden_states = torch.empty([0, 0, 0])
                     
                 # Sample fake images
-                input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states, negative_encoder_hidden_states)
+                input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states)
 
                 # Convert real images to latent space
                 if not args.ldm:
