@@ -985,7 +985,7 @@ def main():
         timesteps = noise_scheduler.timesteps
         
         # Get random initial latents
-        latents_size = (batch_size, unet.config.n_channels, args.resolution / 8, args.resolution / 8)
+        latents_size = (batch_size, unet.config.in_channels, args.resolution / 8, args.resolution / 8)
         latents = torch.randn(latents_size, device=device)
         latents = latents * noise_scheduler.init_noise_sigma
 
