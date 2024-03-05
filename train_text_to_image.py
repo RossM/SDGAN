@@ -1116,10 +1116,6 @@ def main():
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
                 
-                del d_samples, d_latents
-                if args.discriminator_noise:
-                    del noise
-
                 # Get gradient of generator loss with respect to the sample
                 loss_g.backward(inputs=(samples,))
                 if noise_scheduler.config.prediction_type == "sample":
