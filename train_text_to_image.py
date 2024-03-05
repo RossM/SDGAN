@@ -570,6 +570,7 @@ def main():
             )
             
     in_channels = unet.config.in_channels
+    vae_scaling_factor = vae.config.scaling_factor
         
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -1096,7 +1097,7 @@ def main():
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del generator_output, samples, input_latents, sample_input_latents
+                del generator_output, input_latents, sample_input_latents
                 
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
@@ -1143,6 +1144,20 @@ def main():
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
+                        
+                    if global_step % 100 == 0:
+                        images = vae.decode(samples / vae_scaling_factor)
+                        for tracker in accelerator.trackers:
+                            if tracker.name == "wandb":
+                                tracker.log(
+                                    {
+                                        "sample": [
+                                            wandb.Image(image, caption=f"{i}")
+                                            for i, image in enumerate(images)
+                                        ]
+                                    }
+                                )
+
 
             if global_step >= args.max_train_steps:
                 break
