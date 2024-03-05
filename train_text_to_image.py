@@ -968,7 +968,7 @@ def main():
     progress_bar.set_description("Steps")
     
     uncond_captions = tokenizer(
-            [""] * args.batch_size, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            [""] * args.train_batch_size, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
 
     uncond_encoder_hidden_states = text_encoder(uncond_captions)[0]
