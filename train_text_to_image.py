@@ -1052,6 +1052,12 @@ def main():
                 # Sample fake images
                 input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states)
 
+                sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
+                sample_input_latents = torch.zeros_like(latents)
+                for i in range(bsz):
+                    sample_input_latents[i] = input_latents[sample_steps[i], i]
+                del input_latents
+
                 # Convert real images to latent space
                 if not args.ldm:
                     latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
@@ -1087,10 +1093,6 @@ def main():
                 del discriminator_output
 
                 # Do sample forward pass again, this time with gradient information
-                sample_steps = torch.randint(0, args.sampling_steps, (bsz,), device=latents.device)
-                sample_input_latents = torch.zeros_like(latents)
-                for i in range(bsz):
-                    sample_input_latents[i] = input_latents[sample_steps[i], i]
                 generator_output = unet(sample_input_latents, timesteps[sample_steps], encoder_hidden_states).sample
 
                 # Use the sample gradient to approximate the effect of one sampling step on the final output
@@ -1104,7 +1106,7 @@ def main():
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del generator_output, input_latents, sample_input_latents
+                del generator_output, sample_input_latents
                 
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
@@ -1159,10 +1161,8 @@ def main():
                         torch.cuda.empty_cache()
                         images = []
                         with torch.no_grad():
-                            for sample in samples:
-                                image = vae.decode(sample[None,:,:,:] / vae_scaling_factor, return_dict=False)[0]
-                                image = (image / 2 + 0.5).clamp(0, 1)
-                                images.append(image)
+                            images = vae.decode(samples / vae_scaling_factor, return_dict=False)[0]
+                            images = (images / 2 + 0.5).clamp(0, 1)
                         for tracker in accelerator.trackers:
                             if tracker.name == "wandb":
                                 tracker.log(
