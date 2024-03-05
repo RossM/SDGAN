@@ -64,7 +64,7 @@ DATASET_NAME_MAPPING = {
 }
 
 
-def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight_dtype, epoch):
+def log_validation(vae, text_encoder, tokenizer, unet, noise_scheduler, args, accelerator, weight_dtype, epoch):
     logger.info("Running validation... ")
 
     pipeline = StableDiffusionPipeline.from_pretrained(
@@ -1192,6 +1192,7 @@ def main():
                     text_encoder,
                     tokenizer,
                     unet,
+                    noise_scheduler,
                     args,
                     accelerator,
                     weight_dtype,
