@@ -453,6 +453,13 @@ def parse_args():
         required=False, 
         help="Sampling steps during training"
     )
+    parser.add_argument(
+        "--log_sample_steps", 
+        type=int, 
+        default=100, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1145,7 +1152,7 @@ def main():
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
                         
-                if global_step % 100 == 0:
+                if global_step % args.log_sample_steps == 0:
                     images = []
                     for sample in samples:
                         images.append(vae.decode(sample[None,:,:,:,:] / vae_scaling_factor))
