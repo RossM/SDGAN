@@ -1112,18 +1112,20 @@ def main():
                 lr_scheduler_discriminator.step()
 
                 # Get generator loss
-                samples.requires_grad = True
+                d_samples.requires_grad = True
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
                 
                 # Get gradient of generator loss with respect to the sample
-                loss_g.backward(inputs=(samples,))
+                loss_g.backward(inputs=(d_samples,))
                 if noise_scheduler.config.prediction_type == "sample":
-                    sample_grad = samples.grad.detach()
+                    sample_grad = d_samples.grad.detach()
                 else:
-                    sample_grad = -samples.grad.detach()
+                    sample_grad = -d_samples.grad.detach()
 
-                del discriminator_output, samples.grad
+                del discriminator_output, d_samples, d_latents
+                if args.discriminator_noise:
+                    del noise
 
                 if args.multistep:
                     for i in range(input_latents.shape[0]):
