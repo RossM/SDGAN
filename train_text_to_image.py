@@ -1155,8 +1155,9 @@ def main():
                 if global_step % args.log_sample_steps == 0:
                     torch.cuda.empty_cache()
                     images = []
-                    for sample in samples:
-                        images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
+                    with torch.no_grad():
+                        for sample in samples:
+                            images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
                     for tracker in accelerator.trackers:
                         if tracker.name == "wandb":
                             tracker.log(
