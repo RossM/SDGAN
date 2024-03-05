@@ -460,6 +460,9 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--multistep", action="store_true", help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1052,11 +1055,12 @@ def main():
                 # Sample fake images
                 input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states)
 
-                sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
-                sample_input_latents = torch.zeros_like(latents)
-                for i in range(bsz):
-                    sample_input_latents[i] = input_latents[sample_steps[i], i]
-                del input_latents
+                if not args.multistep:
+                    sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
+                    sample_input_latents = torch.zeros_like(latents)
+                    for i in range(bsz):
+                        sample_input_latents[i] = input_latents[sample_steps[i], i]
+                    del input_latents
 
                 # Convert real images to latent space
                 if not args.ldm:
@@ -1089,24 +1093,37 @@ def main():
 
                 # Get gradient of generator loss with respect to the sample
                 loss_g.backward(inputs=(samples,))
-
-                del discriminator_output
-
-                # Do sample forward pass again, this time with gradient information
-                generator_output = unet(sample_input_latents, timesteps[sample_steps], encoder_hidden_states).sample
-
-                # Use the sample gradient to approximate the effect of one sampling step on the final output
                 if noise_scheduler.config.prediction_type == "sample":
-                    generator_output.backward(samples.grad.detach())
+                    sample_grad = samples.grad.detach()
                 else:
-                    generator_output.backward(-samples.grad.detach())
+                    sample_grad = -samples.grad.detach()
+
+                del discriminator_output, samples.grad
+
+                if args.multistep:
+                    for i in range(timesteps):
+                        # Do sample forward pass again, this time with gradient information
+                        generator_output = unet(input_latents[i], timesteps[i], encoder_hidden_states).sample
+
+                        # Use the sample gradient to approximate the effect of one sampling step on the final output
+                        generator_output.backward(sample_grad)
+                else:
+                    # Do sample forward pass again, this time with gradient information
+                    generator_output = unet(sample_input_latents, timesteps[sample_steps], encoder_hidden_states).sample
+
+                    # Use the sample gradient to approximate the effect of one sampling step on the final output
+                    generator_output.backward(sample_grad)
 
                 # Generator optimization step
                 optimizer.step()
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del generator_output, sample_input_latents
+                del generator_output
+                if args.multistep:
+                    del input_latents
+                else:
+                    del sample_input_latents
                 
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
