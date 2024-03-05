@@ -1095,9 +1095,9 @@ def main():
 
                 # Use the sample gradient to approximate the effect of one sampling step on the final output
                 if noise_scheduler.config.prediction_type == "sample":
-                    generator_output.backward(-samples.grad.detach())
-                else:
                     generator_output.backward(samples.grad.detach())
+                else:
+                    generator_output.backward(-samples.grad.detach())
 
                 # Generator optimization step
                 optimizer.step()
