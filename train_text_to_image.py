@@ -1153,23 +1153,24 @@ def main():
                         logger.info(f"Saved state to {save_path}")
                         
                 if global_step % args.log_sample_steps == 0:
-                    torch.cuda.empty_cache()
-                    images = []
-                    with torch.no_grad():
-                        for sample in samples:
-                            images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
-                    for tracker in accelerator.trackers:
-                        if tracker.name == "wandb":
-                            tracker.log(
-                                {
-                                    "sample": [
-                                        wandb.Image(image, caption=f"{i}")
-                                        for i, image in enumerate(images)
-                                    ]
-                                }
-                            )
-                    del images
-                    torch.cuda.empty_cache()
+                    if accelerator.is_main_process:
+                        torch.cuda.empty_cache()
+                        images = []
+                        with torch.no_grad():
+                            for sample in samples:
+                                images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
+                        for tracker in accelerator.trackers:
+                            if tracker.name == "wandb":
+                                tracker.log(
+                                    {
+                                        "sample": [
+                                            wandb.Image(image, caption=f"{i}")
+                                            for i, image in enumerate(images)
+                                        ]
+                                    }
+                                )
+                        del images
+                        torch.cuda.empty_cache()
 
             if global_step >= args.max_train_steps:
                 break
