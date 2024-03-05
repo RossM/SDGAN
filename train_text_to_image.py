@@ -1163,7 +1163,7 @@ def main():
                             tracker.log(
                                 {
                                     "sample": [
-                                        wandb.Image(image, caption=f"{i}: {batch[caption_column][i]}")
+                                        wandb.Image(image, caption=f"{i}")
                                         for i, image in enumerate(images)
                                     ]
                                 }
