@@ -1153,6 +1153,7 @@ def main():
                         logger.info(f"Saved state to {save_path}")
                         
                 if global_step % args.log_sample_steps == 0:
+                    torch.cuda.empty_cache()
                     images = []
                     for sample in samples:
                         images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
@@ -1167,7 +1168,7 @@ def main():
                                 }
                             )
                     del images
-
+                    torch.cuda.empty_cache()
 
             if global_step >= args.max_train_steps:
                 break
