@@ -1146,13 +1146,15 @@ def main():
                         logger.info(f"Saved state to {save_path}")
                         
                 if global_step % 100 == 0:
-                    images = vae.decode(samples / vae_scaling_factor)
+                    images = []
+                    for sample in samples:
+                        images.append(vae.decode(sample / vae_scaling_factor))
                     for tracker in accelerator.trackers:
                         if tracker.name == "wandb":
                             tracker.log(
                                 {
                                     "sample": [
-                                        wandb.Image(image, caption=f"{i}")
+                                        wandb.Image(image, caption=f"{i}: {batch[caption_column][i]}")
                                         for i, image in enumerate(images)
                                     ]
                                 }
