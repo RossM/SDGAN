@@ -1069,7 +1069,7 @@ def main():
 
                 sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=encoder_hidden_states.device)
                 if not args.multistep:
-                    sample_input_latents = torch.zeros_like(latents)
+                    sample_input_latents = torch.zeros_like(samples)
                     for i in range(bsz):
                         sample_input_latents[i] = input_latents[sample_steps[i], i]
                     del input_latents
