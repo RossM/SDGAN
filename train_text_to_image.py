@@ -973,7 +973,7 @@ def main():
             padding="max_length", 
             truncation=True, 
             return_tensors="pt",
-        ).input_ids
+        ).input_ids.to(text_encoder.device)
 
     uncond_encoder_hidden_states = text_encoder(uncond_input_ids)[0]
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
