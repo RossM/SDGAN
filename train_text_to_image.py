@@ -1087,7 +1087,7 @@ def main():
                 elif args.discriminator_timesteps == "zero":
                     d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
                 elif args.discriminator_timesteps == "sample":
-                    d_timesteps = timesteps[sample_steps]
+                    d_timesteps = timesteps[sample_steps].to(dtype=torch.long)
                     
                 if args.discriminator_noise:
                     noise = torch.randn_like(latents)
