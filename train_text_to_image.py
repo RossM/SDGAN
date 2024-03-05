@@ -445,6 +445,13 @@ def parse_args():
     parser.add_argument(
         "--ldm", action="store_true", help="Train an unconditional latent diffusion model."
     )
+    parser.add_argument(
+        "--sampling_steps", 
+        type=int, 
+        default=5, 
+        required=False, 
+        help="Sampling steps during training"
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
