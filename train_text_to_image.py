@@ -1112,6 +1112,8 @@ def main():
                 
             logs = {
                 "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
+                "d_loss_real": avg_loss_d_real.item(),
+                "d_loss_fake": avg_loss_d_fake.item(),
                 "g_loss": avg_loss_g.item(),
                 "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
                 "g_lr": lr_scheduler.get_last_lr()[0]
