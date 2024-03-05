@@ -1158,7 +1158,7 @@ def main():
                         images = []
                         with torch.no_grad():
                             for sample in samples:
-                                images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor))
+                                images.append(vae.decode(sample[None,:,:,:] / vae_scaling_factor, return_dict=False)[0])
                         for tracker in accelerator.trackers:
                             if tracker.name == "wandb":
                                 tracker.log(
