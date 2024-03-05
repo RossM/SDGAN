@@ -1101,7 +1101,7 @@ def main():
                 del discriminator_output, samples.grad
 
                 if args.multistep:
-                    for i in range(timesteps):
+                    for i in range(input_latents.shape[0]):
                         # Do sample forward pass again, this time with gradient information
                         generator_output = unet(input_latents[i], timesteps[i], encoder_hidden_states).sample
 
