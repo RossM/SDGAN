@@ -1075,7 +1075,9 @@ def main():
 
                 # Do sample forward pass again, this time with gradient information
                 sample_steps = torch.randint(0, args.sampling_steps, (bsz,), device=latents.device)
-                sample_input_latents = torch.gather(input_latents, 0, sample_steps[None,:,None,None,None])[0]
+                sample_input_latents = torch.zeros_like(latents)
+                for i in range(bsz):
+                    sample_input_latents[i] = input_latents[sample_steps[i], i]
                 generator_output = unet(sample_input_latents, timesteps[sample_steps], encoder_hidden_states).sample
 
                 # Use the sample gradient to approximate the effect of one sampling step on the final output
