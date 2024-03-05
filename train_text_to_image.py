@@ -73,6 +73,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
         text_encoder=text_encoder,
         tokenizer=tokenizer,
         unet=accelerator.unwrap_model(unet),
+        scheduler=noise_scheduler,
         safety_checker=None,
         revision=args.revision,
         torch_dtype=weight_dtype,
@@ -92,7 +93,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, args, accelerator, weight
     images = []
     for i in range(len(args.validation_prompts)):
         with torch.autocast("cuda"):
-            image = pipeline(args.validation_prompts[i], num_inference_steps=20, generator=generator).images[0]
+            image = pipeline(args.validation_prompts[i], num_inference_steps=args.sampling_steps, generator=generator).images[0]
 
         images.append(image)
 
