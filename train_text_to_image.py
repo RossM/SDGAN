@@ -1073,6 +1073,8 @@ def main():
                 # Get gradient of generator loss with respect to the sample
                 loss_g.backward(inputs=(samples,))
 
+                del discriminator_output
+
                 # Do sample forward pass again, this time with gradient information
                 sample_steps = torch.randint(0, args.sampling_steps, (bsz,), device=latents.device)
                 sample_input_latents = torch.zeros_like(latents)
@@ -1090,6 +1092,8 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
                 lr_scheduler.step()
+                
+                del generator_output
                 
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
