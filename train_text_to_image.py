@@ -567,6 +567,8 @@ def main():
             discriminator = UNet2DModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
+            
+    in_channels = unet.config.in_channels
         
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -1000,7 +1002,7 @@ def main():
         timesteps = noise_scheduler.timesteps
         
         # Get random initial latents
-        latents_size = (batch_size, unet.config.in_channels, args.resolution // 8, args.resolution // 8)
+        latents_size = (batch_size, in_channels, args.resolution // 8, args.resolution // 8)
         latents = torch.randn(latents_size, device=device)
         latents = latents * noise_scheduler.init_noise_sigma
 
