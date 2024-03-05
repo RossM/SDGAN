@@ -1055,6 +1055,8 @@ def main():
                 # Sample fake images
                 input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states)
 
+                bsz = encoder_hidden_states.shape[0]
+
                 if not args.multistep:
                     sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
                     sample_input_latents = torch.zeros_like(latents)
@@ -1069,7 +1071,6 @@ def main():
                 else:
                     latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
 
-                bsz = latents.shape[0]
                 zero_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
 
                 # Get discriminator losses
