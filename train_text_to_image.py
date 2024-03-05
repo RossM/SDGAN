@@ -1093,7 +1093,7 @@ def main():
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del generator_output
+                del generator_output, samples, input_latents, sample_input_latents
                 
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
