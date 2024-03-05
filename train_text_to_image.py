@@ -553,7 +553,7 @@ def main():
 
     # Load scheduler, tokenizer and models.
     if not args.ldm:
-        noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+        ddim_scheduler = noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
         tokenizer = CLIPTokenizer.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
         )
@@ -573,7 +573,7 @@ def main():
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
     else:
-        noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+        ddim_scheduler = noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
         tokenizer = None
         text_encoder = None
         vae = VQModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="vqvae", revision=args.revision)
@@ -1083,7 +1083,7 @@ def main():
 
                 
                 if args.discriminator_timesteps == "random":
-                    d_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=latents.device)
+                    d_timesteps = torch.randint(0, ddim_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=latents.device)
                 elif args.discriminator_timesteps == "zero":
                     d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
                 elif args.discriminator_timesteps == "sample":
@@ -1091,8 +1091,8 @@ def main():
                     
                 if args.discriminator_noise:
                     noise = torch.randn_like(latents)
-                    d_samples = noise_scheduler.add_noise(samples, noise, d_timesteps)
-                    d_latents = noise_scheduler.add_noise(latents, noise, d_timesteps)
+                    d_samples = ddim_scheduler.add_noise(samples, noise, d_timesteps)
+                    d_latents = ddim_scheduler.add_noise(latents, noise, d_timesteps)
                 else:
                     d_samples = samples
                     d_latents = latents
