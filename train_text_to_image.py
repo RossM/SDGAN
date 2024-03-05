@@ -463,6 +463,16 @@ def parse_args():
     parser.add_argument(
         "--multistep", action="store_true", help=""
     )
+    parser.add_argument(
+        "--discriminator_timesteps", 
+        type=str, 
+        default="zero", 
+        required=False, 
+        help=""
+    )
+    parser.add_argument(
+        "--discriminator_noise", action="store_true", help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1057,8 +1067,8 @@ def main():
 
                 bsz = encoder_hidden_states.shape[0]
 
+                sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
                 if not args.multistep:
-                    sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=latents.device)
                     sample_input_latents = torch.zeros_like(latents)
                     for i in range(bsz):
                         sample_input_latents[i] = input_latents[sample_steps[i], i]
@@ -1071,14 +1081,28 @@ def main():
                 else:
                     latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
 
-                zero_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
+                
+                if args.discriminator_timesteps == "random":
+                    d_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=latents.device)
+                elif args.discriminator_timesteps == "zero":
+                    d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
+                elif args.discriminator_timesteps == "sample":
+                    d_timesteps = timesteps[sample_steps]
+                    
+                if args.discriminator_noise:
+                    noise = torch.randn_like(latents)
+                    d_samples = noise_scheduler.add_noise(samples, noise, d_timesteps)
+                    d_latents = noise_scheduler.add_noise(latents, noise, d_timesteps)
+                else:
+                    d_samples = samples
+                    d_latents = latents
 
                 # Get discriminator losses
-                discriminator_output = discriminator(samples, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_d_fake = F.binary_cross_entropy_with_logits(discriminator_output, torch.zeros_like(discriminator_output))
                 loss_d_fake.backward()
 
-                discriminator_output = discriminator(latents, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                discriminator_output = discriminator(d_latents, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_d_real = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
                 loss_d_real.backward()
 
@@ -1089,8 +1113,10 @@ def main():
 
                 # Get generator loss
                 samples.requires_grad = True
-                discriminator_output = discriminator(samples, zero_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+                discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+                
+                del noise, d_samples, d_latents
 
                 # Get gradient of generator loss with respect to the sample
                 loss_g.backward(inputs=(samples,))
