@@ -1157,6 +1157,7 @@ def main():
                                     ]
                                 }
                             )
+                    del images
 
 
             if global_step >= args.max_train_steps:
