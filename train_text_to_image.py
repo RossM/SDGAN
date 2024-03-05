@@ -967,7 +967,11 @@ def main():
     progress_bar = tqdm(range(global_step, args.max_train_steps + (resume_step if args.resume_from_checkpoint else 0)), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
-    uncond_encoder_hidden_states = text_encoder(tokenizer(""))[0]
+    uncond_captions = tokenizer(
+            [""] * args.batch_size, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        )
+
+    uncond_encoder_hidden_states = text_encoder(uncond_captions)[0]
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
