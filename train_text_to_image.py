@@ -473,6 +473,16 @@ def parse_args():
     parser.add_argument(
         "--discriminator_noise", action="store_true", help=""
     )
+    parser.add_argument(
+        "--teacher_forcing", action="store_true", help=""
+    )
+    parser.add_argument(
+        "--teacher_forcing_weight", 
+        type=float, 
+        default=1.0, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -572,6 +582,15 @@ def main():
             discriminator = UNet2DConditionModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
+        if args.teacher_forcing:
+            try:
+                frozen_unet = UNet2DConditionModel.from_pretrained(
+                    args.pretrained_model_name_or_path, subfolder="frozen_unet", revision=args.non_ema_revision
+                )
+            except:
+                frozen_unet = UNet2DConditionModel.from_pretrained(
+                    args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+                )
     else:
         ddim_scheduler = noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
         tokenizer = None
@@ -588,6 +607,15 @@ def main():
             discriminator = UNet2DModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
+        if args.teacher_forcing:
+            try:
+                frozen_unet = UNet2DModel.from_pretrained(
+                    args.pretrained_model_name_or_path, subfolder="frozen_unet", revision=args.non_ema_revision
+                )
+            except:
+                frozen_unet = UNet2DModel.from_pretrained(
+                    args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+                )
             
     in_channels = unet.config.in_channels
     vae_scaling_factor = vae.config.scaling_factor
@@ -596,6 +624,8 @@ def main():
     vae.requires_grad_(False)
     if not args.ldm:
         text_encoder.requires_grad_(False)
+    if args.teacher_forcing:
+        frozen_unet.requires_grad_(False)
     
     # Create EMA for the unet.
     if args.use_ema:
@@ -938,6 +968,8 @@ def main():
     if not args.ldm:
         text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
+    if args.teacher_forcing:
+        frozen_unet.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     if not fixed_epoch_len:
@@ -1126,27 +1158,41 @@ def main():
                 del discriminator_output, d_samples, d_latents
                 if args.discriminator_noise:
                     del noise
+                    
+                def run_generator_loss_backward(sample_grad, latents, timestep, encoder_hidden_states):
+                    if args.teacher_forcing:
+                        with torch.no_grad():
+                            teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
 
-                if args.multistep:
-                    for i in range(input_latents.shape[0]):
-                        # Do sample forward pass again, this time with gradient information
-                        generator_output = unet(input_latents[i], timesteps[i], encoder_hidden_states).sample
-
-                        # Use the sample gradient to approximate the effect of one sampling step on the final output
-                        generator_output.backward(sample_grad)
-                else:
                     # Do sample forward pass again, this time with gradient information
-                    generator_output = unet(sample_input_latents, timesteps[sample_steps], encoder_hidden_states).sample
+                    generator_output = unet(latents, timestep, encoder_hidden_states).sample
+
+                    if args.teacher_forcing:
+                        with torch.no_grad():
+                            teacher_error = teacher_output - generator_output
+                            teacher_forcing = args.teacher_forcing_weight * teacher_error
+                            loss_teacher = loss_teacher + (0.5 * teacher_error ** 2).mean()
+                    else:
+                        teacher_forcing = 0
+                        loss_teacher = 0
 
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
-                    generator_output.backward(sample_grad)
+                    generator_output.backward(sample_grad + teacher_forcing)
+
+                    return loss_teacher
+
+                if args.multistep:
+                    loss_teacher = 0
+                    for i in range(input_latents.shape[0]):
+                        loss_teacher = loss_teacher + run_generator_loss_backward(sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                else:
+                    loss_teacher = run_generator_loss_backward(sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
 
                 # Generator optimization step
                 optimizer.step()
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del generator_output
                 if args.multistep:
                     del input_latents
                 else:
@@ -1155,12 +1201,14 @@ def main():
                 avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_g = accelerator.gather(loss_g.repeat(args.train_batch_size)).mean().detach()
+                avg_loss_teacher = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
                 
             logs = {
                 "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
                 "d_loss_real": avg_loss_d_real.item(),
                 "d_loss_fake": avg_loss_d_fake.item(),
                 "g_loss": avg_loss_g.item(),
+                "teacher_loss": avg_loss_teacher.item(),
                 "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
                 "g_lr": lr_scheduler.get_last_lr()[0]
             }
@@ -1270,6 +1318,8 @@ def main():
             )
         pipeline.save_pretrained(args.output_dir)
         discriminator.save_pretrained(os.path.join(args.output_dir, "discriminator"))
+        if args.teacher_forcing:
+            frozen_unet.save_pretrained(os.path.join(args.output_dir, "frozen_unet"))
 
         if args.push_to_hub:
             upload_folder(
