@@ -847,7 +847,7 @@ def main():
             .decode("pil")
             .rename(**{image_column: "png;jpg;jpeg"})
             .select(size_check)
-            .map(preprocess_one)
+            .map(preprocess_one, handler=webdataset.warn_and_continue)
             .with_epoch(epoch_len * args.train_batch_size * accelerator.num_processes)
             #.batched(args.train_batch_size)
         )
