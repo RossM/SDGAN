@@ -1159,7 +1159,7 @@ def main():
                 if args.discriminator_noise:
                     del noise
                     
-                def run_generator_loss_backward(sample_grad, latents, timestep, encoder_hidden_states):
+                def run_generator_loss_backward(grad, latents, timestep, encoder_hidden_states):
                     if args.teacher_forcing:
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
@@ -1168,16 +1168,16 @@ def main():
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
                     if args.teacher_forcing:
-                        with torch.no_grad():
-                            teacher_error = teacher_output - generator_output
-                            teacher_forcing = args.teacher_forcing_weight * teacher_error
-                            loss_teacher = (0.5 * teacher_error ** 2).mean()
+                        teacher_forcing = generator_output.detach()
+                        teacher_forcing.requires_grad = True
+                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(teacher_forcing, teacher_output)
+                        loss_teacher.backward(inputs=(teacher_forcing,))
+                        grad = grad + loss_teacher.grad.detach()
                     else:
-                        teacher_forcing = 0
                         loss_teacher = 0
 
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
-                    generator_output.backward(sample_grad + teacher_forcing)
+                    generator_output.backward(grad)
 
                     return loss_teacher
 
@@ -1185,6 +1185,7 @@ def main():
                     loss_teacher = 0
                     for i in range(input_latents.shape[0]):
                         loss_teacher = loss_teacher + run_generator_loss_backward(sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                    loss_teacher = loss_teacher / input_latents.shape[0]
                 else:
                     loss_teacher = run_generator_loss_backward(sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
 
