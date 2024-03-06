@@ -844,8 +844,8 @@ def main():
                 handler=webdataset.warn_and_continue,
             )
             .shuffle(5000)
-            .decode("pil")
-            .rename(**{image_column: "png;jpg;jpeg"})
+            .decode("pil", handler=webdataset.warn_and_continue)
+            .rename(**{image_column: "png;jpg;jpeg"}, handler=webdataset.warn_and_continue)
             .select(size_check)
             .map(preprocess_one, handler=webdataset.warn_and_continue)
             .with_epoch(epoch_len * args.train_batch_size * accelerator.num_processes)
