@@ -1171,7 +1171,7 @@ def main():
                         with torch.no_grad():
                             teacher_error = teacher_output - generator_output
                             teacher_forcing = args.teacher_forcing_weight * teacher_error
-                            loss_teacher = loss_teacher + (0.5 * teacher_error ** 2).mean()
+                            loss_teacher = (0.5 * teacher_error ** 2).mean()
                     else:
                         teacher_forcing = 0
                         loss_teacher = 0
