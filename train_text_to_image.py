@@ -1174,7 +1174,7 @@ def main():
                         loss_teacher.backward(inputs=(teacher_forcing,))
                         grad = grad + teacher_forcing.grad.detach()
                     else:
-                        loss_teacher = 0
+                        loss_teacher = torch.zeros([], device=latents.device)
 
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
                     generator_output.backward(grad)
