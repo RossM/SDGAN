@@ -1172,7 +1172,7 @@ def main():
                         teacher_forcing.requires_grad = True
                         loss_teacher = args.teacher_forcing_weight * F.mse_loss(teacher_forcing, teacher_output)
                         loss_teacher.backward(inputs=(teacher_forcing,))
-                        grad = grad + loss_teacher.grad.detach()
+                        grad = grad + teacher_forcing.grad.detach()
                     else:
                         loss_teacher = 0
 
