@@ -1173,7 +1173,9 @@ def main():
                             
                     if args.weight_p != 0:
                         snr = compute_snr(timestep.to(dtype=torch.long))
-                        grad = grad * snr[:,None,None,None] ** args.weight_p
+                        while len(snr.shape) < len(grad.shape):
+                            snr = snr[..., None]
+                        grad = grad * snr ** args.weight_p
 
                     # Do sample forward pass again, this time with gradient information
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
