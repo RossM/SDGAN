@@ -483,6 +483,13 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--weight_p", 
+        type=float, 
+        default=0.0, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1163,6 +1170,10 @@ def main():
                     if args.teacher_forcing:
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
+                            
+                    if args.weight_p != 0:
+                        snr = compute_snr(timestep)
+                        grad = grad * snr ** args.weight_p
 
                     # Do sample forward pass again, this time with gradient information
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
