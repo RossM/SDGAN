@@ -1078,7 +1078,7 @@ def main():
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
-    def sampling_loop(noise: Tensor, sampling_steps: int, encoder_hidden_states: Tensor, save_latents: bool = False):
+    def sampling_loop(noise: Tensor, sampling_steps: int, encoder_hidden_states: Tensor, save_latents: bool = True):
         batch_size = encoder_hidden_states.shape[0]
         device = encoder_hidden_states.device
         
