@@ -484,6 +484,16 @@ def parse_args():
         help=""
     )
     parser.add_argument(
+        "--reflow", action="store_true", help=""
+    )
+    parser.add_argument(
+        "--reflow_weight", 
+        type=float, 
+        default=1.0, 
+        required=False, 
+        help=""
+    )
+    parser.add_argument(
         "--weight_p", 
         type=float, 
         default=0.0, 
@@ -1181,26 +1191,40 @@ def main():
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
                     if args.teacher_forcing:
-                        teacher_forcing = generator_output.detach()
-                        teacher_forcing.requires_grad = True
-                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(teacher_forcing, teacher_output)
-                        loss_teacher.backward(inputs=(teacher_forcing,))
-                        grad = grad + teacher_forcing.grad.detach()
+                        out_target = generator_output.detach()
+                        out_target.requires_grad = True
+                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(out_target, teacher_output)
+                        loss_teacher.backward(inputs=(out_target,))
+                        grad = grad + out_target.grad.detach()
                     else:
                         loss_teacher = torch.zeros([], device=latents.device)
+                        
+                    if args.reflow:
+                        alphas_cumprod = noise_scheduler.alphas_cumprod[timestep]
+                        out_target = generator_output.detach()
+                        out_target.requires_grad = True
+                        reflow_target = (latents - alphas_cumprod ** 0.5 * generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
+                        loss_reflow = args.reflow_weight * F.mse_loss(out_target, reflow_target)
+                        loss_reflow.backward(inputs=(out_target,))
+                        grad = grad + loss_reflow.grad.detach()
+                    else:
+                        loss_reflow = torch.zeros([], device=latents.device)
 
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
                     generator_output.backward(grad)
 
-                    return loss_teacher
+                    return loss_teacher, loss_reflow
 
                 if args.multistep:
-                    loss_teacher = 0
+                    loss_teacher = loss_reflow = 0
                     for i in range(input_latents.shape[0]):
-                        loss_teacher = loss_teacher + run_generator_loss_backward(sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                        loss_teacher = loss_teacher + loss_teacher_step
+                        loss_reflow = loss_reflow + loss_reflow_step
                     loss_teacher = loss_teacher / input_latents.shape[0]
+                    loss_reflow = loss_reflow / input_latents.shape[0]
                 else:
-                    loss_teacher = run_generator_loss_backward(sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
+                    loss_teacher, loss_reflow = run_generator_loss_backward(sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
 
                 # Generator optimization step
                 optimizer.step()
@@ -1216,6 +1240,7 @@ def main():
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_g = accelerator.gather(loss_g.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_teacher = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
+                avg_loss_reflow = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
                 
             logs = {
                 "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
@@ -1223,6 +1248,7 @@ def main():
                 "d_loss_fake": avg_loss_d_fake.item(),
                 "g_loss": avg_loss_g.item(),
                 "teacher_loss": avg_loss_teacher.item(),
+                "reflow_loss": avg_loss_reflow.item(),
                 "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
                 "g_lr": lr_scheduler.get_last_lr()[0]
             }
