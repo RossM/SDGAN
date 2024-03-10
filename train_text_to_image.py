@@ -1211,7 +1211,6 @@ def main():
 
                         output = generator_output.detach()
                         output.requires_grad = True
-                        reflow_target = (latents - alphas_cumprod ** 0.5 * generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
                         loss_reflow = args.reflow_weight * F.mse_loss(output, reflow_target)
                         loss_reflow.backward(inputs=(output,))
                         grad = grad + output.grad.detach()
@@ -1221,7 +1220,7 @@ def main():
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
                     generator_output.backward(grad)
 
-                    return loss_teacher, loss_reflow
+                    return (loss_teacher, loss_reflow)
 
                 if args.multistep:
                     loss_teacher = loss_reflow = 0
