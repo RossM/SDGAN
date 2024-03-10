@@ -1201,6 +1201,14 @@ def main():
                         
                     if args.reflow:
                         alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep]
+                        target_v = (latents - generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
+                        if noise_scheduler.config.prediction_type == "epsilon":
+                            # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
+                            # v = alphas_cumprod ** 0.5 * epsilon - (1 - alphas_cumprod) ** 0.5 * x_0
+                            reflow_target = alphas_cumprod ** 0.5 * target_v + (1 - alphas_cumprod) ** 0.5 * latents
+                        elif noise_scheduler.config.prediction_type == "v_prediction":
+                            reflow_target = target_v
+
                         out_target = generator_output.detach()
                         out_target.requires_grad = True
                         reflow_target = (latents - alphas_cumprod ** 0.5 * generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
