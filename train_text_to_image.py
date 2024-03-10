@@ -1201,11 +1201,13 @@ def main():
                         
                     if args.reflow:
                         alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)]
-                        target_v = (latents - samples) / (1 - alphas_cumprod) ** 0.5
+                        sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+                        sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+                        target_v = (latents - samples) / sqrt_one_minus_alphas_cumprod
                         if noise_scheduler.config.prediction_type == "epsilon":
                             # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
                             # v = alphas_cumprod ** 0.5 * epsilon - (1 - alphas_cumprod) ** 0.5 * x_0
-                            reflow_target = alphas_cumprod ** 0.5 * target_v + (1 - alphas_cumprod) ** 0.5 * latents
+                            reflow_target = sqrt_alphas_cumprod * target_v + sqrt_one_minus_alphas_cumprod * latents
                         elif noise_scheduler.config.prediction_type == "v_prediction":
                             reflow_target = target_v
 
@@ -1247,7 +1249,7 @@ def main():
                 avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_g = accelerator.gather(loss_g.repeat(args.train_batch_size)).mean().detach()
                 avg_loss_teacher = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
-                avg_loss_reflow = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
+                avg_loss_reflow = accelerator.gather(loss_reflow.repeat(args.train_batch_size)).mean().detach()
                 
             logs = {
                 "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
