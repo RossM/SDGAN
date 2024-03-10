@@ -1200,7 +1200,7 @@ def main():
                         loss_teacher = torch.zeros([], device=latents.device)
                         
                     if args.reflow:
-                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep]
+                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)]
                         target_v = (latents - generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
                         if noise_scheduler.config.prediction_type == "epsilon":
                             # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
