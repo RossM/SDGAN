@@ -1200,7 +1200,7 @@ def main():
                         loss_teacher = torch.zeros([], device=latents.device)
                         
                     if args.reflow:
-                        alphas_cumprod = noise_scheduler.alphas_cumprod[timestep]
+                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep]
                         out_target = generator_output.detach()
                         out_target.requires_grad = True
                         reflow_target = (latents - alphas_cumprod ** 0.5 * generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
