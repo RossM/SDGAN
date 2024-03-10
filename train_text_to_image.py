@@ -500,6 +500,22 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--reflow_from_teacher", action="store_true", help=""
+    )
+    parser.add_argument(
+        "--teacher_sampling_steps", 
+        type=int, 
+        default=20, 
+        required=False, 
+        help=""
+    )
+    parser.add_argument(
+        "--gan_targets_teacher", action="store_true", help=""
+    )
+    parser.add_argument(
+        "--use_teacher", action="store_true", default=None, help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -513,6 +529,9 @@ def parse_args():
     # default to using the same revision for the non-ema model if not specified
     if args.non_ema_revision is None:
         args.non_ema_revision = args.revision
+        
+    if args.use_teacher is None:
+        args.use_teacher = args.teacher_forcing or args.resample_from_teacher or args.gan_targets_teacher
 
     return args
 
@@ -599,7 +618,7 @@ def main():
             discriminator = UNet2DConditionModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
-        if args.teacher_forcing:
+        if args.use_teacher:
             try:
                 frozen_unet = UNet2DConditionModel.from_pretrained(
                     args.pretrained_model_name_or_path, subfolder="frozen_unet", revision=args.non_ema_revision
@@ -624,7 +643,7 @@ def main():
             discriminator = UNet2DModel.from_pretrained(
                 args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
             )
-        if args.teacher_forcing:
+        if args.use_teacher:
             try:
                 frozen_unet = UNet2DModel.from_pretrained(
                     args.pretrained_model_name_or_path, subfolder="frozen_unet", revision=args.non_ema_revision
@@ -641,7 +660,7 @@ def main():
     vae.requires_grad_(False)
     if not args.ldm:
         text_encoder.requires_grad_(False)
-    if args.teacher_forcing:
+    if args.use_teacher:
         frozen_unet.requires_grad_(False)
     
     # Create EMA for the unet.
@@ -985,7 +1004,7 @@ def main():
     if not args.ldm:
         text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
-    if args.teacher_forcing:
+    if args.use_teacher:
         frozen_unet.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1059,7 +1078,7 @@ def main():
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
-    def sampling_loop(sampling_steps: int, encoder_hidden_states: Tensor):
+    def sampling_loop(noise: Tensor, sampling_steps: int, encoder_hidden_states: Tensor, save_latents: bool = False):
         batch_size = encoder_hidden_states.shape[0]
         device = encoder_hidden_states.device
         
@@ -1073,11 +1092,13 @@ def main():
         timesteps = noise_scheduler.timesteps
         
         # Get random initial latents
-        latents_size = (batch_size, in_channels, args.resolution // 8, args.resolution // 8)
-        latents = torch.randn(latents_size, device=device)
+        latents = noise
         latents = latents * noise_scheduler.init_noise_sigma
 
-        input_latents = torch.zeros((sampling_steps, *latents_size), device=device)
+        if save_latents:
+            input_latents = torch.zeros((sampling_steps, *latents_size), device=device)
+        else:
+            input_latents = None
         
         # Sampling loop
         for i, t in enumerate(timesteps):
@@ -1090,7 +1111,8 @@ def main():
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
             noise_pred = guidance_scale * noise_pred_text + (1 - guidance_scale) * noise_pred_uncond
             
-            latents = noise_scheduler.step(noise_pred, t, latents).prev_sample
+            if save_latents:
+                latents = noise_scheduler.step(noise_pred, t, latents).prev_sample
 
         return input_latents, timesteps, latents
         
@@ -1111,10 +1133,16 @@ def main():
                 else:
                     encoder_hidden_states = torch.empty([0, 0, 0])
                     
-                # Sample fake images
-                input_latents, timesteps, samples = sampling_loop(args.sampling_steps, encoder_hidden_states)
-
                 bsz = encoder_hidden_states.shape[0]
+
+                latents_size = (bsz, in_channels, args.resolution // 8, args.resolution // 8)
+                noise = torch.randn(latents_size, device=encoder_hidden_states.device)
+        
+                if args.reflow_from_teacher or args.gan_targets_teacher:
+                    _, _, teacher_samples = sampling_loop(noise, args.teacher_sampling_steps, encoder_hidden_states, save_latents=False)
+                    
+                # Sample fake images
+                input_latents, timesteps, samples = sampling_loop(noise, args.sampling_steps, encoder_hidden_states)
 
                 sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=encoder_hidden_states.device)
                 if not args.multistep:
@@ -1123,28 +1151,31 @@ def main():
                         sample_input_latents[i] = input_latents[sample_steps[i], i]
                     del input_latents
 
-                # Convert real images to latent space
-                if not args.ldm:
-                    latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
-                    latents = latents * vae.config.scaling_factor
+                if args.gan_targets_teacher:
+                    real_latents = teacher_samples
                 else:
-                    latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
+                    # Convert real images to latent space
+                    if not args.ldm:
+                        real_latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+                        real_latents = real_latents * vae.config.scaling_factor
+                    else:
+                        real_latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
 
                 
                 if args.discriminator_timesteps == "random":
-                    d_timesteps = torch.randint(0, ddim_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=latents.device)
+                    d_timesteps = torch.randint(0, ddim_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=real_latents.device)
                 elif args.discriminator_timesteps == "zero":
-                    d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=latents.device)
+                    d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=real_latents.device)
                 elif args.discriminator_timesteps == "sample":
                     d_timesteps = timesteps[sample_steps].to(dtype=torch.long)
                     
                 if args.discriminator_noise:
-                    noise = torch.randn_like(latents)
+                    noise = torch.randn_like(real_latents)
                     d_samples = ddim_scheduler.add_noise(samples, noise, d_timesteps)
-                    d_latents = ddim_scheduler.add_noise(latents, noise, d_timesteps)
+                    d_latents = ddim_scheduler.add_noise(real_latents, noise, d_timesteps)
                 else:
                     d_samples = samples
-                    d_latents = latents
+                    d_latents = real_latents
 
                 # Get discriminator losses
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
@@ -1223,17 +1254,19 @@ def main():
                     generator_output.backward(grad)
 
                     return (loss_teacher, loss_reflow)
+                
+                target_samples = teacher_samples if args.reflow_from_teacher else samples
 
                 if args.multistep:
                     loss_teacher = loss_reflow = 0
                     for i in range(input_latents.shape[0]):
-                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(samples, sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(target_samples, sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
                         loss_teacher = loss_teacher + loss_teacher_step
                         loss_reflow = loss_reflow + loss_reflow_step
                     loss_teacher = loss_teacher / input_latents.shape[0]
                     loss_reflow = loss_reflow / input_latents.shape[0]
                 else:
-                    loss_teacher, loss_reflow = run_generator_loss_backward(samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
+                    loss_teacher, loss_reflow = run_generator_loss_backward(target_samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
 
                 # Generator optimization step
                 optimizer.step()
@@ -1367,7 +1400,7 @@ def main():
             )
         pipeline.save_pretrained(args.output_dir)
         discriminator.save_pretrained(os.path.join(args.output_dir, "discriminator"))
-        if args.teacher_forcing:
+        if args.use_teacher:
             frozen_unet.save_pretrained(os.path.join(args.output_dir, "frozen_unet"))
 
         if args.push_to_hub:
