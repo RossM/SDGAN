@@ -1191,11 +1191,11 @@ def main():
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
                     if args.teacher_forcing:
-                        out_target = generator_output.detach()
-                        out_target.requires_grad = True
-                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(out_target, teacher_output)
-                        loss_teacher.backward(inputs=(out_target,))
-                        grad = grad + out_target.grad.detach()
+                        output = generator_output.detach()
+                        output.requires_grad = True
+                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(output, teacher_output)
+                        loss_teacher.backward(inputs=(output,))
+                        grad = grad + output.grad.detach()
                     else:
                         loss_teacher = torch.zeros([], device=latents.device)
                         
@@ -1209,12 +1209,12 @@ def main():
                         elif noise_scheduler.config.prediction_type == "v_prediction":
                             reflow_target = target_v
 
-                        out_target = generator_output.detach()
-                        out_target.requires_grad = True
+                        output = generator_output.detach()
+                        output.requires_grad = True
                         reflow_target = (latents - alphas_cumprod ** 0.5 * generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
-                        loss_reflow = args.reflow_weight * F.mse_loss(out_target, reflow_target)
-                        loss_reflow.backward(inputs=(out_target,))
-                        grad = grad + loss_reflow.grad.detach()
+                        loss_reflow = args.reflow_weight * F.mse_loss(output, reflow_target)
+                        loss_reflow.backward(inputs=(output,))
+                        grad = grad + output.grad.detach()
                     else:
                         loss_reflow = torch.zeros([], device=latents.device)
 
