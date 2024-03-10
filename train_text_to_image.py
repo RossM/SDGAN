@@ -1176,7 +1176,7 @@ def main():
                 if args.discriminator_noise:
                     del noise
                     
-                def run_generator_loss_backward(grad, latents, timestep, encoder_hidden_states):
+                def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states):
                     if args.teacher_forcing:
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
@@ -1201,7 +1201,7 @@ def main():
                         
                     if args.reflow:
                         alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)]
-                        target_v = (latents - generator_output.detach()) / (1 - alphas_cumprod) ** 0.5
+                        target_v = (latents - samples) / (1 - alphas_cumprod) ** 0.5
                         if noise_scheduler.config.prediction_type == "epsilon":
                             # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
                             # v = alphas_cumprod ** 0.5 * epsilon - (1 - alphas_cumprod) ** 0.5 * x_0
@@ -1225,13 +1225,13 @@ def main():
                 if args.multistep:
                     loss_teacher = loss_reflow = 0
                     for i in range(input_latents.shape[0]):
-                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(samples, sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
                         loss_teacher = loss_teacher + loss_teacher_step
                         loss_reflow = loss_reflow + loss_reflow_step
                     loss_teacher = loss_teacher / input_latents.shape[0]
                     loss_reflow = loss_reflow / input_latents.shape[0]
                 else:
-                    loss_teacher, loss_reflow = run_generator_loss_backward(sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
+                    loss_teacher, loss_reflow = run_generator_loss_backward(samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
 
                 # Generator optimization step
                 optimizer.step()
