@@ -531,7 +531,7 @@ def parse_args():
         args.non_ema_revision = args.revision
         
     if args.use_teacher is None:
-        args.use_teacher = args.teacher_forcing or args.resample_from_teacher or args.gan_targets_teacher
+        args.use_teacher = args.teacher_forcing or args.reflow_from_teacher or args.gan_targets_teacher
 
     return args
 
