@@ -1102,7 +1102,8 @@ def main():
         
         # Sampling loop
         for i, t in enumerate(timesteps):
-            input_latents[i] = latents
+            if save_latents:
+                input_latents[i] = latents
             
             latent_model_input = torch.cat([latents, latents])
             latent_model_input = noise_scheduler.scale_model_input(latent_model_input, t)
@@ -1111,8 +1112,7 @@ def main():
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
             noise_pred = guidance_scale * noise_pred_text + (1 - guidance_scale) * noise_pred_uncond
             
-            if save_latents:
-                latents = noise_scheduler.step(noise_pred, t, latents).prev_sample
+            latents = noise_scheduler.step(noise_pred, t, latents).prev_sample
 
         return input_latents, timesteps, latents
         
