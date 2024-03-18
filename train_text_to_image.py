@@ -1219,7 +1219,7 @@ def main():
                     
                 def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states):
                     while len(timestep.shape) < len(samples.shape):
-                        timestep = timestep[:,None]
+                        timestep = timestep[...,None]
 
                     if args.teacher_forcing:
                         with torch.no_grad():
