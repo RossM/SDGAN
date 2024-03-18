@@ -1218,9 +1218,6 @@ def main():
                     del noise
                     
                 def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states):
-                    while len(timestep.shape) < len(samples.shape):
-                        timestep = timestep[...,None]
-
                     if args.teacher_forcing:
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
@@ -1244,7 +1241,7 @@ def main():
                         loss_teacher = torch.zeros([], device=latents.device)
                         
                     if args.reflow:
-                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)]
+                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)][:,None,None,None]
                         sqrt_alphas_cumprod = alphas_cumprod ** 0.5
                         sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
                         target_v = (latents - samples) / (sqrt_one_minus_alphas_cumprod ** args.reflow_p)
@@ -1275,7 +1272,7 @@ def main():
                 if args.multistep:
                     loss_teacher = loss_reflow = 0
                     for i in range(input_latents.shape[0]):
-                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(target_samples, sample_grad, input_latents[i], timesteps[i], encoder_hidden_states)
+                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(target_samples, sample_grad, input_latents[i], timesteps[i][None], encoder_hidden_states)
                         loss_teacher = loss_teacher + loss_teacher_step
                         loss_reflow = loss_reflow + loss_reflow_step
                     loss_teacher = loss_teacher / input_latents.shape[0]
