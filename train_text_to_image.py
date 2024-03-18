@@ -519,6 +519,13 @@ def parse_args():
     parser.add_argument(
         "--debug_reverse_reflow", action="store_true", help=""
     )
+    parser.add_argument(
+        "--reflow_p", 
+        type=float, 
+        default=1.0, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1227,8 +1234,8 @@ def main():
                     if args.teacher_forcing:
                         output = generator_output.detach()
                         output.requires_grad = True
-                        loss_teacher = args.teacher_forcing_weight * F.mse_loss(output, teacher_output)
-                        loss_teacher.backward(inputs=(output,))
+                        loss_teacher = F.mse_loss(output, teacher_output)
+                        (args.teacher_forcing_weight * loss_teacher).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
                     else:
                         loss_teacher = torch.zeros([], device=latents.device)
@@ -1237,7 +1244,7 @@ def main():
                         alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)]
                         sqrt_alphas_cumprod = alphas_cumprod ** 0.5
                         sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
-                        target_v = (latents - samples) / sqrt_one_minus_alphas_cumprod
+                        target_v = (latents - samples) / (sqrt_one_minus_alphas_cumprod ** args.reflow_p)
                         if args.debug_reverse_reflow:
                             target_v = -target_v
                         if noise_scheduler.config.prediction_type == "epsilon":
@@ -1249,8 +1256,8 @@ def main():
 
                         output = generator_output.detach()
                         output.requires_grad = True
-                        loss_reflow = args.reflow_weight * F.mse_loss(output, reflow_target)
-                        loss_reflow.backward(inputs=(output,))
+                        loss_reflow = F.mse_loss(output, reflow_target)
+                        (args.reflow_weight * loss_reflow).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
                     else:
                         loss_reflow = torch.zeros([], device=latents.device)
