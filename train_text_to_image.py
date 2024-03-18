@@ -516,6 +516,9 @@ def parse_args():
     parser.add_argument(
         "--use_teacher", action="store_true", default=None, help=""
     )
+    parser.add_argument(
+        "--debug_reverse_reflow", action="store_true", help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1235,6 +1238,8 @@ def main():
                         sqrt_alphas_cumprod = alphas_cumprod ** 0.5
                         sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
                         target_v = (latents - samples) / sqrt_one_minus_alphas_cumprod
+                        if args.debug_reverse_reflow:
+                            target_v = -target_v
                         if noise_scheduler.config.prediction_type == "epsilon":
                             # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
                             # v = alphas_cumprod ** 0.5 * epsilon - (1 - alphas_cumprod) ** 0.5 * x_0
