@@ -1217,7 +1217,39 @@ def main():
                 if args.discriminator_noise:
                     del noise
                     
+                def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
+                    alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
+                    sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
+                    sigmas = torch.cat([torch.tensor(1, device=latents.device), sigmas])
+
+                    while len(timesteps.shape) < len(latents.shape):
+                        timesteps = timesteps[...,None]
+
+                    # latents = noise * sqrt_one_minus_alphas_cumprod + samples * sqrt_alphas_cumprod
+                    noise = (latents - samples * alphas_cumprod[timesteps] ** 0.5) / (1 - alphas_cumprod[timesteps]) ** 0.5
+                    if args.reflow_p == 0:
+                        next_latents = samples
+                    else:
+                        next_latents = (
+                            noise * (1 - alphas_cumprod[timesteps - 1]) ** args.reflow_p + 
+                            samples * alphas_cumprod[timesteps - 1] ** args.reflow_p
+                        )
+
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        # next_latents = latents + model_output * (sigmas[timesteps] - sigmas[timesteps + 1])
+                        model_output = (next_latents - latents) / (sigmas[timesteps] - sigmas[timesteps + 1])               
+
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        raise ValueError(f"v_prediction is not implemented")
+
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                    
+                    return model_output                    
+                    
                 def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states):
+                    timestep = timestep.to(dtype=torch.long)
+
                     if args.teacher_forcing:
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
@@ -1241,18 +1273,7 @@ def main():
                         loss_teacher = torch.zeros([], device=latents.device)
                         
                     if args.reflow:
-                        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)[timestep.to(dtype=torch.long)][:,None,None,None]
-                        sqrt_alphas_cumprod = alphas_cumprod ** 0.5
-                        sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
-                        target_v = (latents - samples) / (sqrt_one_minus_alphas_cumprod ** args.reflow_p)
-                        if args.debug_reverse_reflow:
-                            target_v = -target_v
-                        if noise_scheduler.config.prediction_type == "epsilon":
-                            # latents = alphas_cumprod ** 0.5 * x_0 + (1 - alphas_cumprod) ** 0.5 * epsilon
-                            # v = alphas_cumprod ** 0.5 * epsilon - (1 - alphas_cumprod) ** 0.5 * x_0
-                            reflow_target = sqrt_alphas_cumprod * target_v + sqrt_one_minus_alphas_cumprod * latents
-                        elif noise_scheduler.config.prediction_type == "v_prediction":
-                            reflow_target = target_v
+                        reflow_target = get_reflow_target(samples, latents, timestep)
 
                         output = generator_output.detach()
                         output.requires_grad = True
