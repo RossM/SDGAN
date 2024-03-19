@@ -1226,10 +1226,13 @@ def main():
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
 
+                    step_ratio = noise_scheduler.config.num_train_timesteps // args.sampling_steps
+                    next_timesteps = torch.clamp(timesteps - step_ratio, min=0)
+
                     if args.reflow_p == 0:
                         next_latents = samples
                     else:
-                        ratio = ((1 - alphas_cumprod[timesteps - 1]) / (1 - alphas_cumprod[timesteps]))
+                        ratio = ((1 - alphas_cumprod[next_timesteps]) / (1 - alphas_cumprod[timesteps]))
                         next_latents = latents * ratio ** args.reflow_p + samples * (1 - ratio) ** args.reflow_p
 
                     if noise_scheduler.config.prediction_type == "epsilon":
@@ -1254,7 +1257,7 @@ def main():
                         # Divide by (sigmas[timesteps - 1] - sigmas[timesteps])
                         # model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
 
-                        model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
+                        model_output = (next_latents / sqrt_alphas_cumprod[next_timesteps] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[next_timesteps] - sigmas[timesteps])
 
                     elif noise_scheduler.config.prediction_type == "v_prediction":
                         raise ValueError(f"v_prediction is not implemented")
