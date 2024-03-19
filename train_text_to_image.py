@@ -1226,15 +1226,11 @@ def main():
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
 
-                    # latents = noise * sqrt_one_minus_alphas_cumprod + samples * sqrt_alphas_cumprod
-                    noise = (latents - samples * sqrt_alphas_cumprod[timesteps]) / sqrt_one_minus_alphas_cumprod[timesteps]
                     if args.reflow_p == 0:
                         next_latents = samples
                     else:
-                        next_latents = (
-                            noise * (1 - alphas_cumprod[timesteps - 1]) ** args.reflow_p + 
-                            samples * alphas_cumprod[timesteps - 1] ** args.reflow_p
-                        )
+                        ratio = ((1 - alphas_cumprod[timesteps - 1]) / (1 - alphas_cumprod[timesteps]))
+                        next_latents = latents * ratio ** args.reflow_p + samples * (1 - ratio) ** args.reflow_p
 
                     if noise_scheduler.config.prediction_type == "epsilon":
                         # We want to find the output from the model that will cause the noise scheduler to predict
