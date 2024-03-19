@@ -1219,13 +1219,15 @@ def main():
                     
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
-                    sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
+                    sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+                    sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+                    sigmas = sqrt_one_minus_alphas_cumprod / sqrt_alphas_cumprod
 
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
 
                     # latents = noise * sqrt_one_minus_alphas_cumprod + samples * sqrt_alphas_cumprod
-                    noise = (latents - samples * alphas_cumprod[timesteps] ** 0.5) / (1 - alphas_cumprod[timesteps]) ** 0.5
+                    noise = (latents - samples * sqrt_alphas_cumprod[timesteps]) / sqrt_one_minus_alphas_cumprod[timesteps]
                     if args.reflow_p == 0:
                         next_latents = samples
                     else:
@@ -1235,16 +1237,34 @@ def main():
                         )
 
                     if noise_scheduler.config.prediction_type == "epsilon":
-                        # next_latents = latents + model_output * (sigmas[timesteps - 1] - sigmas[timesteps])
-                        model_output = (next_latents - latents) / (sigmas[timesteps - 1] - sigmas[timesteps])               
+                        # We want to find the output from the model that will cause the noise scheduler to predict
+                        # next_latents as the next latents.
+                        #
+                        # predicted_sample = (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) / sqrt_alphas_cumprod[timesteps]
+                        # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + predicted_sample * sqrt_alphas_cumprod[timesteps - 1]
+                        #
+                        # Substituting and rearranging
+                        # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
+                        #
+                        # Rearranging
+                        # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps]) = next_latents - latents * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
+                        #
+                        # Divide by sqrt_alphas_cumprod[timesteps - 1]
+                        # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * / sqrt_alphas_cumprod[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
+                        #
+                        # Substitute sigmas = sqrt_one_minus_alphas_cumprod / sqrt_alphas_cumprod
+                        # model_output * sigmas[timesteps - 1] - model_output * sigmas[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
+                        #
+                        # Divide by (sigmas[timesteps - 1] - sigmas[timesteps])
+                        # model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
+
+                        model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
 
                     elif noise_scheduler.config.prediction_type == "v_prediction":
                         raise ValueError(f"v_prediction is not implemented")
 
                     else:
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                    
-                    model_output = model_output / alphas_cumprod[timesteps - 1] ** 0.5
                     
                     return model_output                    
                     
