@@ -1217,7 +1217,9 @@ def main():
                 if args.discriminator_noise:
                     del noise
                     
+                @torch.no_grad()
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
+                    print(f"timesteps: {timesteps}")
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
                     sqrt_alphas_cumprod = alphas_cumprod ** 0.5
                     sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
