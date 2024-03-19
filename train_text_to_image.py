@@ -1219,16 +1219,15 @@ def main():
                     
                 @torch.no_grad()
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
-                    print(f"timesteps: {timesteps}")
+                    #print(f"timesteps: {timesteps}")
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
                     sqrt_alphas_cumprod = alphas_cumprod ** 0.5
                     sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
-                    sigmas = sqrt_one_minus_alphas_cumprod / sqrt_alphas_cumprod
 
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
 
-                    step_ratio = noise_scheduler.config.num_train_timesteps // args.sampling_steps
+                    step_ratio = noise_scheduler.config.num_train_timesteps // max(args.sampling_steps - 1, 1)
                     next_timesteps = torch.clamp(timesteps - step_ratio, min=0)
 
                     if args.reflow_p == 0:
@@ -1259,7 +1258,10 @@ def main():
                         # Divide by (sigmas[timesteps - 1] - sigmas[timesteps])
                         # model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
 
-                        model_output = (next_latents / sqrt_alphas_cumprod[next_timesteps] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[next_timesteps] - sigmas[timesteps])
+                        sigmas = sqrt_one_minus_alphas_cumprod[timesteps] / sqrt_alphas_cumprod[timesteps]
+                        next_sigmas = sqrt_one_minus_alphas_cumprod[next_timesteps] / sqrt_alphas_cumprod[next_timesteps]
+                        next_sigmas[timesteps < step_ratio] = 0
+                        model_output = (next_latents / sqrt_alphas_cumprod[next_timesteps] - latents / sqrt_alphas_cumprod[timesteps]) / (next_sigmas - sigmas)
 
                     elif noise_scheduler.config.prediction_type == "v_prediction":
                         raise ValueError(f"v_prediction is not implemented")
