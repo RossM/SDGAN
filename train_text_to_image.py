@@ -1220,7 +1220,7 @@ def main():
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
                     sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
-                    sigmas = torch.cat([torch.tensor(1, device=latents.device), sigmas])
+                    sigmas = torch.cat([torch.tensor([0], device=latents.device), sigmas])
 
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
