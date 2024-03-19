@@ -1220,7 +1220,6 @@ def main():
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
                     alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
                     sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
-                    sigmas = torch.cat([torch.tensor([0], device=latents.device), sigmas])
 
                     while len(timesteps.shape) < len(latents.shape):
                         timesteps = timesteps[...,None]
@@ -1236,14 +1235,16 @@ def main():
                         )
 
                     if noise_scheduler.config.prediction_type == "epsilon":
-                        # next_latents = latents + model_output * (sigmas[timesteps] - sigmas[timesteps + 1])
-                        model_output = (next_latents - latents) / (sigmas[timesteps] - sigmas[timesteps + 1])               
+                        # next_latents = latents + model_output * (sigmas[timesteps - 1] - sigmas[timesteps])
+                        model_output = (next_latents - latents) / (sigmas[timesteps - 1] - sigmas[timesteps])               
 
                     elif noise_scheduler.config.prediction_type == "v_prediction":
                         raise ValueError(f"v_prediction is not implemented")
 
                     else:
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                    
+                    model_output = model_output / alphas_cumprod[timesteps - 1] ** 0.5
                     
                     return model_output                    
                     
