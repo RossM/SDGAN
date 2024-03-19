@@ -1234,6 +1234,7 @@ def main():
                         next_latents = samples
                     else:
                         ratio = ((1 - alphas_cumprod[next_timesteps]) / (1 - alphas_cumprod[timesteps]))
+                        ratio[timesteps < step_ratio] = 0
                         next_latents = latents * ratio ** args.reflow_p + samples * (1 - ratio) ** args.reflow_p
 
                     if noise_scheduler.config.prediction_type == "epsilon":
