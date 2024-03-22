@@ -526,6 +526,20 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--d_lr", 
+        type=float, 
+        default=None, 
+        required=False, 
+        help=""
+    )
+    parser.add_argument(
+        "--g_lr", 
+        type=float, 
+        default=None, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -811,8 +825,8 @@ def main():
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
-    optimizer = optimizer_cls(unet.parameters(), **optimizer_kwargs)
-    optimizer_discriminator = optimizer_cls(discriminator.parameters(), **optimizer_kwargs)
+    optimizer = optimizer_cls(unet.parameters(), {**optimizer_kwargs, "lr": args.g_lr if args.g_lr != None else args.learning_rate})
+    optimizer_discriminator = optimizer_cls(discriminator.parameters(), {**optimizer_kwargs, "lr": args.d_lr if args.d_lr != None else args.learning_rate})
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
