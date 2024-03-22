@@ -422,7 +422,7 @@ def parse_args():
     parser.add_argument(
         "--gan_weight", 
         type=float, 
-        default=0.2, 
+        default=1.0, 
         required=False, 
         help="Strength of effect GAN has on training"
     )
@@ -537,13 +537,6 @@ def parse_args():
         "--g_lr", 
         type=float, 
         default=None, 
-        required=False, 
-        help=""
-    )
-    parser.add_argument(
-        "--gan_weight", 
-        type=float, 
-        default=1.0, 
         required=False, 
         help=""
     )
