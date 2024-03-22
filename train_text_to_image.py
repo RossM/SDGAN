@@ -825,8 +825,8 @@ def main():
     else:
         raise ValueError(f"Unknown optimizer `{args.optimizer}`")
 
-    optimizer = optimizer_cls(unet.parameters(), {**optimizer_kwargs, "lr": args.g_lr if args.g_lr != None else args.learning_rate})
-    optimizer_discriminator = optimizer_cls(discriminator.parameters(), {**optimizer_kwargs, "lr": args.d_lr if args.d_lr != None else args.learning_rate})
+    optimizer = optimizer_cls(unet.parameters(), **{**optimizer_kwargs, "lr": args.g_lr if args.g_lr != None else args.learning_rate})
+    optimizer_discriminator = optimizer_cls(discriminator.parameters(), **{**optimizer_kwargs, "lr": args.d_lr if args.d_lr != None else args.learning_rate})
 
     # Preprocessing the datasets.
     # We need to tokenize input captions and transform the images.
