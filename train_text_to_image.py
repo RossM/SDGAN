@@ -540,6 +540,13 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--gan_weight", 
+        type=float, 
+        default=1.0, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -1298,6 +1305,8 @@ def main():
                         while len(snr.shape) < len(grad.shape):
                             snr = snr[..., None]
                         grad = grad * snr ** args.weight_p
+
+                    grad = grad * args.gan_weight
 
                     # Do sample forward pass again, this time with gradient information
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
