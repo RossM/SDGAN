@@ -1112,7 +1112,7 @@ def main():
     noise_scheduler = diffusers.EulerAncestralDiscreteScheduler.from_config(noise_scheduler.config)
 
     @torch.no_grad()
-    def sampling_loop(noise: Tensor, sampling_steps: int, encoder_hidden_states: Tensor, save_latents: bool = True):
+    def sampling_loop(noise: Tensor, sampling_steps: int, encoder_hidden_states: Tensor, save_latents: bool = True, latents_size = Null):
         batch_size = encoder_hidden_states.shape[0]
         device = encoder_hidden_states.device
         
@@ -1150,314 +1150,346 @@ def main():
 
         return input_latents, timesteps, latents
         
-    for epoch in range(first_epoch, args.num_train_epochs):
-        unet.train()
-        train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
-            # Skip steps until we reach the resumed step
-            if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
-                if step % args.gradient_accumulation_steps == 0:
-                    progress_bar.update(1)
-                continue
+    def get_sample_input_latents(input_latents, sample_steps):
+        sample_input_latents = torch.zeros_like(input_latents[0])
+        for i in range(bsz):
+            sample_input_latents[i] = input_latents[sample_steps[i], i]
+        return sample_input_latents[None, ...]
 
-            with accelerator.accumulate(unet):
-                # Get the text embedding for conditioning
-                if not args.ldm:
-                    encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-                else:
-                    encoder_hidden_states = torch.empty([0, 0, 0])
-                    
-                bsz = encoder_hidden_states.shape[0]
+    def discriminator_step(losses, d_fake_input, d_real_input, d_timesteps, encoder_hidden_states):
+        # Get discriminator losses
+        discriminator_output = discriminator(d_fake_input, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+        loss_d_fake = F.binary_cross_entropy_with_logits(discriminator_output, torch.zeros_like(discriminator_output))
+        loss_d_fake.backward()
 
-                latents_size = (bsz, in_channels, args.resolution // 8, args.resolution // 8)
-                noise = torch.randn(latents_size, device=encoder_hidden_states.device)
-        
-                if args.reflow_from_teacher or args.gan_targets_teacher or args.teacher_matching:
-                    _, _, teacher_samples = sampling_loop(noise, args.teacher_sampling_steps, encoder_hidden_states, save_latents=False)
-                    
-                # Sample fake images
-                input_latents, timesteps, samples = sampling_loop(noise, args.sampling_steps, encoder_hidden_states)
+        discriminator_output = discriminator(d_real_input, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+        loss_d_real = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+        loss_d_real.backward()
 
-                sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=encoder_hidden_states.device)
-                if not args.multistep:
-                    sample_input_latents = torch.zeros_like(samples)
-                    for i in range(bsz):
-                        sample_input_latents[i] = input_latents[sample_steps[i], i]
-                    del input_latents
+        # Discriminator optimization step
+        optimizer_discriminator.step()
+        optimizer_discriminator.zero_grad()
+        lr_scheduler_discriminator.step()
 
-                if args.gan_targets_teacher:
-                    real_latents = teacher_samples
-                else:
-                    # Convert real images to latent space
-                    if not args.ldm:
-                        real_latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
-                        real_latents = real_latents * vae.config.scaling_factor
-                    else:
-                        real_latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
+        losses["d_loss_real"] = loss_d_fake.detach()
+        losses["d_loss_fake"] = loss_d_real.detach()
 
+    def get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states):
+        # Get generator loss
+        d_fake_input.requires_grad = True
+        discriminator_output = discriminator(d_fake_input, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
+        loss_g_gan = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+
+        sample_logits = discriminator_output.detach()
                 
-                if args.discriminator_timesteps == "random":
-                    d_timesteps = torch.randint(0, ddim_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=real_latents.device)
-                elif args.discriminator_timesteps == "zero":
-                    d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=real_latents.device)
-                elif args.discriminator_timesteps == "sample":
-                    d_timesteps = timesteps[sample_steps].to(dtype=torch.long)
+        # Get gradient of generator loss with respect to the sample
+        loss_g_gan.backward(inputs=(d_fake_input,))
+        if noise_scheduler.config.prediction_type == "sample":
+            sample_grad = d_fake_input.grad.detach()
+        else:
+            sample_grad = -d_fake_input.grad.detach()
                     
-                if args.discriminator_noise:
-                    noise = torch.randn_like(real_latents)
-                    d_samples = ddim_scheduler.add_noise(samples, noise, d_timesteps)
-                    d_latents = ddim_scheduler.add_noise(real_latents, noise, d_timesteps)
-                else:
-                    d_samples = samples
-                    d_latents = real_latents
+        losses["g_loss_gan"]  = loss_g_gan.detach()
 
-                # Get discriminator losses
-                discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
-                loss_d_fake = F.binary_cross_entropy_with_logits(discriminator_output, torch.zeros_like(discriminator_output))
-                loss_d_fake.backward()
+        return sample_grad
 
-                discriminator_output = discriminator(d_latents, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
-                loss_d_real = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
-                loss_d_real.backward()
+    @torch.no_grad()
+    def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
+        #print(f"timesteps: {timesteps}")
+        alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
+        sqrt_alphas_cumprod = alphas_cumprod ** 0.5
+        sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
 
-                # Discriminator optimization step
-                optimizer_discriminator.step()
-                optimizer_discriminator.zero_grad()
-                lr_scheduler_discriminator.step()
+        while len(timesteps.shape) < len(latents.shape):
+            timesteps = timesteps[...,None]
 
-                loss_d_fake = loss_d_fake.detach()
-                loss_d_real = loss_d_real.detach()
+        step_ratio = noise_scheduler.config.num_train_timesteps // max(args.sampling_steps - 1, 1)
+        next_timesteps = torch.clamp(timesteps - step_ratio, min=0)
 
-                # Get generator loss
-                d_samples.requires_grad = True
-                discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
-                loss_g_gan = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+        if args.reflow_p == 0:
+            next_latents = samples
+        else:
+            ratio = ((1 - alphas_cumprod[next_timesteps]) / (1 - alphas_cumprod[timesteps]))
+            ratio[timesteps < step_ratio] = 0
+            next_latents = latents * ratio ** args.reflow_p + samples * (1 - ratio) ** args.reflow_p
 
-                sample_logits = discriminator_output.detach()
-                
-                # Get gradient of generator loss with respect to the sample
-                loss_g_gan.backward(inputs=(d_samples,))
-                if noise_scheduler.config.prediction_type == "sample":
-                    sample_grad = d_samples.grad.detach()
-                else:
-                    sample_grad = -d_samples.grad.detach()
+        if noise_scheduler.config.prediction_type == "epsilon":
+            # We want to find the output from the model that will cause the noise scheduler to predict
+            # next_latents as the next latents.
+            #
+            # predicted_sample = (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) / sqrt_alphas_cumprod[timesteps]
+            # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + predicted_sample * sqrt_alphas_cumprod[timesteps - 1]
+            #
+            # Substituting and rearranging
+            # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
+            #
+            # Rearranging
+            # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps]) = next_latents - latents * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
+            #
+            # Divide by sqrt_alphas_cumprod[timesteps - 1]
+            # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * / sqrt_alphas_cumprod[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
+            #
+            # Substitute sigmas = sqrt_one_minus_alphas_cumprod / sqrt_alphas_cumprod
+            # model_output * sigmas[timesteps - 1] - model_output * sigmas[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
+            #
+            # Divide by (sigmas[timesteps - 1] - sigmas[timesteps])
+            # model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
+
+            sigmas = sqrt_one_minus_alphas_cumprod[timesteps] / sqrt_alphas_cumprod[timesteps]
+            next_sigmas = sqrt_one_minus_alphas_cumprod[next_timesteps] / sqrt_alphas_cumprod[next_timesteps]
+            next_sigmas[timesteps < step_ratio] = 0
+            model_output = (next_latents / sqrt_alphas_cumprod[next_timesteps] - latents / sqrt_alphas_cumprod[timesteps]) / (next_sigmas - sigmas)
+
+        elif noise_scheduler.config.prediction_type == "v_prediction":
+            raise ValueError(f"v_prediction is not implemented")
+
+        else:
+            raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
                     
-                loss_g_gan = loss_g_gan.detach()
-
-                del discriminator_output, d_samples, d_latents
-                if args.discriminator_noise:
-                    del noise
+        return model_output                    
                     
-                @torch.no_grad()
-                def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
-                    #print(f"timesteps: {timesteps}")
-                    alphas_cumprod = noise_scheduler.alphas_cumprod.to(device=latents.device)
-                    sqrt_alphas_cumprod = alphas_cumprod ** 0.5
-                    sqrt_one_minus_alphas_cumprod = (1 - alphas_cumprod) ** 0.5
+    def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states, loss_weight = 1.0):
+        timestep = timestep.to(dtype=torch.long)
+        losses = {}
 
-                    while len(timesteps.shape) < len(latents.shape):
-                        timesteps = timesteps[...,None]
-
-                    step_ratio = noise_scheduler.config.num_train_timesteps // max(args.sampling_steps - 1, 1)
-                    next_timesteps = torch.clamp(timesteps - step_ratio, min=0)
-
-                    if args.reflow_p == 0:
-                        next_latents = samples
-                    else:
-                        ratio = ((1 - alphas_cumprod[next_timesteps]) / (1 - alphas_cumprod[timesteps]))
-                        ratio[timesteps < step_ratio] = 0
-                        next_latents = latents * ratio ** args.reflow_p + samples * (1 - ratio) ** args.reflow_p
-
-                    if noise_scheduler.config.prediction_type == "epsilon":
-                        # We want to find the output from the model that will cause the noise scheduler to predict
-                        # next_latents as the next latents.
-                        #
-                        # predicted_sample = (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) / sqrt_alphas_cumprod[timesteps]
-                        # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + predicted_sample * sqrt_alphas_cumprod[timesteps - 1]
-                        #
-                        # Substituting and rearranging
-                        # next_latents = model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] + (latents - model_output * sqrt_one_minus_alphas_cumprod[timesteps]) * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
-                        #
-                        # Rearranging
-                        # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps]) = next_latents - latents * (sqrt_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps])
-                        #
-                        # Divide by sqrt_alphas_cumprod[timesteps - 1]
-                        # model_output * sqrt_one_minus_alphas_cumprod[timesteps - 1] / sqrt_alphas_cumprod[timesteps - 1] - model_output * sqrt_one_minus_alphas_cumprod[timesteps] * / sqrt_alphas_cumprod[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
-                        #
-                        # Substitute sigmas = sqrt_one_minus_alphas_cumprod / sqrt_alphas_cumprod
-                        # model_output * sigmas[timesteps - 1] - model_output * sigmas[timesteps] = next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]
-                        #
-                        # Divide by (sigmas[timesteps - 1] - sigmas[timesteps])
-                        # model_output = (next_latents / sqrt_alphas_cumprod[timesteps - 1] - latents / sqrt_alphas_cumprod[timesteps]) / (sigmas[timesteps - 1] - sigmas[timesteps])
-
-                        sigmas = sqrt_one_minus_alphas_cumprod[timesteps] / sqrt_alphas_cumprod[timesteps]
-                        next_sigmas = sqrt_one_minus_alphas_cumprod[next_timesteps] / sqrt_alphas_cumprod[next_timesteps]
-                        next_sigmas[timesteps < step_ratio] = 0
-                        model_output = (next_latents / sqrt_alphas_cumprod[next_timesteps] - latents / sqrt_alphas_cumprod[timesteps]) / (next_sigmas - sigmas)
-
-                    elif noise_scheduler.config.prediction_type == "v_prediction":
-                        raise ValueError(f"v_prediction is not implemented")
-
-                    else:
-                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                    
-                    return model_output                    
-                    
-                def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states, loss_weight = 1.0):
-                    timestep = timestep.to(dtype=torch.long)
-                    losses = {}
-
-                    if args.teacher_forcing:
-                        with torch.no_grad():
-                            teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
+        if args.teacher_forcing:
+            with torch.no_grad():
+                teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
                             
-                    # Do sample forward pass again, this time with gradient information
-                    generator_output = unet(latents, timestep, encoder_hidden_states).sample
+        # Do sample forward pass again, this time with gradient information
+        generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
-                    grad = loss_weight * args.gan_weight * grad
+        grad = loss_weight * args.gan_weight * grad
 
-                    if args.teacher_forcing:
-                        output = generator_output.detach()
-                        output.requires_grad = True
-                        loss_teacher_forcing = loss_weight * F.mse_loss(output, teacher_output)
-                        (args.teacher_forcing_weight * loss_teacher_forcing).backward(inputs=(output,))
-                        grad = grad + output.grad.detach()
-                        losses["g_loss_teacher_forcing"] = loss_teacher_forcing.detach()
-                        del loss_teacher_forcing
+        if args.teacher_forcing:
+            output = generator_output.detach()
+            output.requires_grad = True
+            loss_teacher_forcing = loss_weight * F.mse_loss(output, teacher_output)
+            (args.teacher_forcing_weight * loss_teacher_forcing).backward(inputs=(output,))
+            grad = grad + output.grad.detach()
+            losses["g_loss_teacher_forcing"] = loss_teacher_forcing.detach()
+            del loss_teacher_forcing
                         
-                    if args.teacher_matching:
-                        output = samples.detach()
-                        output.requires_grad = True
-                        loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
-                        (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
-                        grad = grad + output.grad.detach()
-                        losses["g_loss_teacher_matching"] = loss_teacher_matching.detach()
-                        del loss_teacher_matching
+        if args.teacher_matching:
+            output = samples.detach()
+            output.requires_grad = True
+            loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
+            (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
+            grad = grad + output.grad.detach()
+            losses["g_loss_teacher_matching"] = loss_teacher_matching.detach()
+            del loss_teacher_matching
                         
-                    if args.reflow:
-                        reflow_target = get_reflow_target(samples, latents, timestep)
-                        output = generator_output.detach()
-                        output.requires_grad = True
-                        loss_reflow = loss_weight * F.mse_loss(output, reflow_target)
-                        (args.reflow_weight * loss_reflow).backward(inputs=(output,))
-                        grad = grad + output.grad.detach()
-                        losses["g_loss_reflow"] = loss_reflow.detach()
-                        del loss_reflow
+        if args.reflow:
+            reflow_target = get_reflow_target(samples, latents, timestep)
+            output = generator_output.detach()
+            output.requires_grad = True
+            loss_reflow = loss_weight * F.mse_loss(output, reflow_target)
+            (args.reflow_weight * loss_reflow).backward(inputs=(output,))
+            grad = grad + output.grad.detach()
+            losses["g_loss_reflow"] = loss_reflow.detach()
+            del loss_reflow
 
-                    if args.weight_p != 0:
-                        snr = compute_snr(timestep.to(dtype=torch.long))
-                        while len(snr.shape) < len(grad.shape):
-                            snr = snr[..., None]
-                        grad = grad * snr ** args.weight_p
+        if args.weight_p != 0:
+            snr = compute_snr(timestep.to(dtype=torch.long))
+            while len(snr.shape) < len(grad.shape):
+                snr = snr[..., None]
+            grad = grad * snr ** args.weight_p
 
-                    # Use the sample gradient to approximate the effect of one sampling step on the final output
-                    generator_output.backward(grad)
+        # Use the sample gradient to approximate the effect of one sampling step on the final output
+        generator_output.backward(grad)
 
-                    return losses
+        return losses
                 
-                target_samples = teacher_samples if args.reflow_from_teacher else samples
-
-                if args.multistep:
-                    steps = input_latents.shape[0]
-                    losses = {}
-                    loss_teacher = loss_reflow = 0
-                    for i in range(steps):
-                        step_losses = run_generator_loss_backward(
-                            target_samples, 
-                            sample_grad, 
-                            input_latents[i], 
-                            timesteps[i][None], 
-                            encoder_hidden_states,
-                            1.0 / steps)
-                        for key, value in step_losses.items():
-                            losses[key] = value + losses.get(key, 0.0)
-                else:
-                    losses = run_generator_loss_backward(target_samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states, 1.0)
-
-                # Generator optimization step
-                optimizer.step()
-                optimizer.zero_grad()
-                lr_scheduler.step()
-                
-                if args.multistep:
-                    del input_latents
-                else:
-                    del sample_input_latents
+    def generator_step(losses, d_fake_input, d_timesteps, encoder_hidden_states, target_samples, input_latents, timesteps, sample_steps):                
+        sample_grad = get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states)
                     
-                losses["d_loss_real"] = loss_d_real
-                losses["d_loss_fake"] = loss_d_fake
-                losses["g_loss_gan"] = loss_g_gan
+        if args.multistep:
+            steps = input_latents.shape[0]
+            losses = {}
+            loss_teacher = loss_reflow = 0
+            for i in range(steps):
+                step_losses = run_generator_loss_backward(
+                    target_samples, 
+                    sample_grad, 
+                    input_latents[i], 
+                    timesteps[i][None], 
+                    encoder_hidden_states,
+                    1.0 / steps)
+                for key, value in step_losses.items():
+                    losses[key] = value + losses.get(key, 0.0)
+        else:
+            step_losses = run_generator_loss_backward(target_samples, sample_grad, input_latents[0], timesteps[sample_steps], encoder_hidden_states, 1.0)
+            for key, value in step_losses.items():
+                losses[key] = value + losses.get(key, 0.0)
+
+        # Generator optimization step
+        optimizer.step()
+        optimizer.zero_grad()
+        lr_scheduler.step()
+        
+    def get_discriminator_input(batch, fake_samples, teacher_samples, timesteps, sample_steps):
+        bsz = fake_samples.shape[0]
+
+        if args.gan_targets_teacher:
+            real_samples = teacher_samples
+        else:
+            # Convert real images to latent space
+            if not args.ldm:
+                real_samples = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
+                real_samples = real_samples * vae.config.scaling_factor
+            else:
+                real_samples = vae.encode(batch["pixel_values"].to(weight_dtype)).latents
                 
-                avg_losses = {}
-                for key in losses:
-                    avg_losses[key] = accelerator.gather(losses[key].repeat(args.train_batch_size)).mean().detach().item()
-                
-            logs = {
-                **avg_losses,
-                "d_loss": (avg_losses["d_loss_real"] + avg_losses["d_loss_fake"]),
-                "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
-                "g_lr": lr_scheduler.get_last_lr()[0]
-            }
-            progress_bar.set_postfix(**logs)
+        if args.discriminator_timesteps == "random":
+            d_timesteps = torch.randint(0, ddim_scheduler.config.num_train_timesteps, (bsz,), dtype=torch.long, device=real_samples.device)
+        elif args.discriminator_timesteps == "zero":
+            d_timesteps = torch.zeros((bsz,), dtype=torch.long, device=real_samples.device)
+        elif args.discriminator_timesteps == "sample":
+            d_timesteps = timesteps[sample_steps].to(dtype=torch.long)
+                    
+        if args.discriminator_noise:
+            noise = torch.randn_like(real_samples)
+            d_fake_input = ddim_scheduler.add_noise(fake_samples, noise, d_timesteps)
+            d_real_input = ddim_scheduler.add_noise(real_samples, noise, d_timesteps)
+        else:
+            d_fake_input = fake_samples
+            d_real_input = real_samples
+                    
+        return d_fake_input, d_real_input, d_timesteps
+                    
+    def training_step(losses, batch):
+        # Get the text embedding for conditioning
+        if not args.ldm:
+            encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+        else:
+            encoder_hidden_states = torch.empty([0, 0, 0])
+                    
+        bsz = encoder_hidden_states.shape[0]
 
-            # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
-                if args.use_ema:
-                    ema_unet.step(unet.parameters())
-                progress_bar.update(1)
-                global_step += 1
-                accelerator.log(logs, step=global_step)
-                train_loss = 0.0
+        latents_size = (bsz, in_channels, args.resolution // 8, args.resolution // 8)
+        noise = torch.randn(latents_size, device=encoder_hidden_states.device)
+        
+        if args.reflow_from_teacher or args.gan_targets_teacher or args.teacher_matching:
+            _, _, teacher_samples = sampling_loop(noise, args.teacher_sampling_steps, encoder_hidden_states, save_latents=False)
+        else:
+            teacher_samples = None
+                    
+        # Sample fake images
+        input_latents, timesteps, fake_samples = sampling_loop(noise, args.sampling_steps, encoder_hidden_states, save_latents=True, latents_size=latents_size)
 
-                if global_step % args.checkpointing_steps == 0:
-                    if accelerator.is_main_process:
-                        if args.checkpoints_total_limit is not None:
-                            checkpoints = os.listdir(args.output_dir)
-                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+        sample_steps = torch.randint(0, input_latents.shape[0], (bsz,), device=encoder_hidden_states.device)
+        if not args.multistep:
+            input_latents = get_sample_input_latents(input_latents, sample_steps)
 
-                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                            if len(checkpoints) >= args.checkpoints_total_limit:
-                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                removing_checkpoints = checkpoints[0:num_to_remove]
+        d_fake_input, d_real_input, d_timesteps = get_discriminator_input(batch, fake_samples, teacher_samples, timesteps, sample_steps)
 
-                                logger.info(
-                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
-                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+        discriminator_step(
+            losses, 
+            d_fake_input, 
+            d_real_input, 
+            d_timesteps, 
+            encoder_hidden_states,
+            )
+        
+        del d_real_input
 
-                                for removing_checkpoint in removing_checkpoints:
-                                    removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                    shutil.rmtree(removing_checkpoint)
+        generator_step(
+            losses, 
+            d_fake_input, 
+            d_timesteps, 
+            encoder_hidden_states, 
+            teacher_samples if args.reflow_from_teacher else samples,
+            input_latents, 
+            timesteps, 
+            sample_steps,
+            )
+        
+    def training_loop():                
+        for epoch in range(first_epoch, args.num_train_epochs):
+            unet.train()
+            discriminator.train()
+            train_loss = 0.0
+            for step, batch in enumerate(train_dataloader):
+                # Skip steps until we reach the resumed step
+                if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
+                    if step % args.gradient_accumulation_steps == 0:
+                        progress_bar.update(1)
+                    continue
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
+                with accelerator.accumulate(unet):
+                    losses = {}
+                    training_step(losses, batch)
+
+                    avg_losses = {}
+                    for key in losses:
+                        avg_losses[key] = accelerator.gather(losses[key].repeat(args.train_batch_size)).mean().detach().item()
                         
-                if global_step % args.log_sample_steps == 0:
-                    if accelerator.is_main_process:
-                        torch.cuda.empty_cache()
-                        images = []
-                        with torch.no_grad():
-                            images = vae.decode(samples / vae_scaling_factor, return_dict=False)[0]
-                            images = (images / 2 + 0.5).clamp(0, 1)
-                        for tracker in accelerator.trackers:
-                            if tracker.name == "wandb":
-                                tracker.log(
-                                    {
-                                        "sample": [
-                                            wandb.Image(image, caption=f"{i}: {sample_logits[i]} (d_step {d_timesteps[i]})")
-                                            for i, image in enumerate(images)
-                                        ]
-                                    }
-                                )
-                        del images
-                        torch.cuda.empty_cache()
+                logs = {
+                    **avg_losses,
+                    "d_loss": (avg_losses["d_loss_real"] + avg_losses["d_loss_fake"]),
+                    "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
+                    "g_lr": lr_scheduler.get_last_lr()[0]
+                }
+                progress_bar.set_postfix(**logs)
 
-            if global_step >= args.max_train_steps:
-                break
-            if fixed_epoch_len and step + 1 >= epoch_len:
-                break
+                # Checks if the accelerator has performed an optimization step behind the scenes
+                if accelerator.sync_gradients:
+                    if args.use_ema:
+                        ema_unet.step(unet.parameters())
+                    progress_bar.update(1)
+                    global_step += 1
+                    accelerator.log(logs, step=global_step)
+                    train_loss = 0.0
+
+                    if global_step % args.checkpointing_steps == 0:
+                        if accelerator.is_main_process:
+                            if args.checkpoints_total_limit is not None:
+                                checkpoints = os.listdir(args.output_dir)
+                                checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+
+                                # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                                if len(checkpoints) >= args.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                    removing_checkpoints = checkpoints[0:num_to_remove]
+
+                                    logger.info(
+                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                    )
+                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+
+                                    for removing_checkpoint in removing_checkpoints:
+                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                        shutil.rmtree(removing_checkpoint)
+
+                            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                            accelerator.save_state(save_path)
+                            logger.info(f"Saved state to {save_path}")
+                        
+                    if global_step % args.log_sample_steps == 0:
+                        if accelerator.is_main_process:
+                            torch.cuda.empty_cache()
+                            images = []
+                            with torch.no_grad():
+                                images = vae.decode(samples / vae_scaling_factor, return_dict=False)[0]
+                                images = (images / 2 + 0.5).clamp(0, 1)
+                            for tracker in accelerator.trackers:
+                                if tracker.name == "wandb":
+                                    tracker.log(
+                                        {
+                                            "sample": [
+                                                wandb.Image(image, caption=f"{i}: {sample_logits[i]} (d_step {d_timesteps[i]})")
+                                                for i, image in enumerate(images)
+                                            ]
+                                        }
+                                    )
+                            del images
+                            torch.cuda.empty_cache()
+
+                if global_step >= args.max_train_steps:
+                    break
+                if fixed_epoch_len and step + 1 >= epoch_len:
+                    break
 
         if accelerator.is_main_process:
             if args.validation_prompts is not None and epoch % args.validation_epochs == 0:
@@ -1479,6 +1511,8 @@ def main():
                 if args.use_ema:
                     # Switch back to the original UNet parameters.
                     ema_unet.restore(unet.parameters())
+
+    training_loop()
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
