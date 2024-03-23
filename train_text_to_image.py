@@ -1418,7 +1418,7 @@ def main():
                                 tracker.log(
                                     {
                                         "sample": [
-                                            wandb.Image(image, caption=f"{i}: {sample_logits[i]}")
+                                            wandb.Image(image, caption=f"{i}: {sample_logits[i]} (d_step {d_timesteps[i]})")
                                             for i, image in enumerate(images)
                                         ]
                                     }
