@@ -1244,7 +1244,9 @@ def main():
                     
                 loss_g_gan = loss_g_gan.detach()
 
-                del discriminator_output, d_samples, d_latents, noise
+                del discriminator_output, d_samples, d_latents
+                if args.discriminator_noise:
+                    del noise
                     
                 @torch.no_grad()
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
@@ -1374,7 +1376,10 @@ def main():
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                del input_latents, sample_input_latents
+                if args.multistep:
+                    del input_latents
+                else:
+                    del sample_input_latents
                     
                 losses["d_loss_real"] = loss_d_real
                 losses["d_loss_fake"] = loss_d_fake
