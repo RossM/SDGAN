@@ -1317,7 +1317,7 @@ def main():
                         loss_teacher_forcing = loss_weight * F.mse_loss(output, teacher_output)
                         (args.teacher_forcing_weight * loss_teacher_forcing).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
-                        losses["g_loss_teacher_forcing"] = loss_teacher_forcing
+                        losses["g_loss_teacher_forcing"] = loss_teacher_forcing.detach()
                         
                     if args.teacher_matching:
                         output = samples.detach()
@@ -1325,7 +1325,7 @@ def main():
                         loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
                         (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
-                        losses["g_loss_teacher_matching"] = loss_teacher_matching
+                        losses["g_loss_teacher_matching"] = loss_teacher_matching.detach()
                         
                     if args.reflow:
                         reflow_target = get_reflow_target(samples, latents, timestep)
@@ -1334,7 +1334,7 @@ def main():
                         loss_reflow = loss_weight * F.mse_loss(output, reflow_target)
                         (args.reflow_weight * loss_reflow).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
-                        losses["g_loss_reflow"] = loss_reflow
+                        losses["g_loss_reflow"] = loss_reflow.detach()
 
                     if args.weight_p != 0:
                         snr = compute_snr(timestep.to(dtype=torch.long))
