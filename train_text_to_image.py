@@ -1293,14 +1293,6 @@ def main():
                         with torch.no_grad():
                             teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
                             
-                    if args.weight_p != 0:
-                        snr = compute_snr(timestep.to(dtype=torch.long))
-                        while len(snr.shape) < len(grad.shape):
-                            snr = snr[..., None]
-                        grad = grad * snr ** args.weight_p
-
-                    grad = grad * args.gan_weight
-
                     # Do sample forward pass again, this time with gradient information
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
@@ -1323,6 +1315,14 @@ def main():
                         grad = grad + output.grad.detach()
                     else:
                         loss_reflow = torch.zeros([], device=latents.device)
+
+                    if args.weight_p != 0:
+                        snr = compute_snr(timestep.to(dtype=torch.long))
+                        while len(snr.shape) < len(grad.shape):
+                            snr = snr[..., None]
+                        grad = grad * snr ** args.weight_p
+
+                    grad = grad * args.gan_weight
 
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
                     generator_output.backward(grad)
