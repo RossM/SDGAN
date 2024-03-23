@@ -540,6 +540,16 @@ def parse_args():
         required=False, 
         help=""
     )
+    parser.add_argument(
+        "--teacher_matching", action="store_true", help=""
+    )
+    parser.add_argument(
+        "--teacher_matching_weight", 
+        type=float, 
+        default=1.0, 
+        required=False, 
+        help=""
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -555,7 +565,7 @@ def parse_args():
         args.non_ema_revision = args.revision
         
     if args.use_teacher is None:
-        args.use_teacher = args.teacher_forcing or args.reflow_from_teacher or args.gan_targets_teacher
+        args.use_teacher = args.teacher_forcing or args.reflow_from_teacher or args.gan_targets_teacher or args.teacher_matching
 
     return args
 
@@ -1162,7 +1172,7 @@ def main():
                 latents_size = (bsz, in_channels, args.resolution // 8, args.resolution // 8)
                 noise = torch.randn(latents_size, device=encoder_hidden_states.device)
         
-                if args.reflow_from_teacher or args.gan_targets_teacher:
+                if args.reflow_from_teacher or args.gan_targets_teacher or args.teacher_matching:
                     _, _, teacher_samples = sampling_loop(noise, args.teacher_sampling_steps, encoder_hidden_states, save_latents=False)
                     
                 # Sample fake images
@@ -1218,12 +1228,12 @@ def main():
                 # Get generator loss
                 d_samples.requires_grad = True
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
-                loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+                loss_g_gan = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
 
                 sample_logits = discriminator_output.detach()
                 
                 # Get gradient of generator loss with respect to the sample
-                loss_g.backward(inputs=(d_samples,))
+                loss_g_gan.backward(inputs=(d_samples,))
                 if noise_scheduler.config.prediction_type == "sample":
                     sample_grad = d_samples.grad.detach()
                 else:
@@ -1288,8 +1298,9 @@ def main():
                     
                     return model_output                    
                     
-                def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states):
+                def run_generator_loss_backward(samples, grad, latents, timestep, encoder_hidden_states, loss_weight = 1.0):
                     timestep = timestep.to(dtype=torch.long)
+                    losses = {}
 
                     if args.teacher_forcing:
                         with torch.no_grad():
@@ -1298,25 +1309,32 @@ def main():
                     # Do sample forward pass again, this time with gradient information
                     generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
+                    grad = loss_weight * args.gan_weight * grad
+
                     if args.teacher_forcing:
                         output = generator_output.detach()
                         output.requires_grad = True
-                        loss_teacher = F.mse_loss(output, teacher_output)
-                        (args.teacher_forcing_weight * loss_teacher).backward(inputs=(output,))
+                        loss_teacher_forcing = loss_weight * F.mse_loss(output, teacher_output)
+                        (args.teacher_forcing_weight * loss_teacher_forcing).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
-                    else:
-                        loss_teacher = torch.zeros([], device=latents.device)
+                        losses["g_loss_teacher_forcing"] = loss_teacher_forcing
+                        
+                    if args.teacher_matching:
+                        output = samples.detach()
+                        output.requires_grad = True
+                        loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
+                        (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
+                        grad = grad + output.grad.detach()
+                        losses["g_loss_teacher_matching"] = loss_teacher_matching
                         
                     if args.reflow:
                         reflow_target = get_reflow_target(samples, latents, timestep)
-
                         output = generator_output.detach()
                         output.requires_grad = True
-                        loss_reflow = F.mse_loss(output, reflow_target)
+                        loss_reflow = loss_weight * F.mse_loss(output, reflow_target)
                         (args.reflow_weight * loss_reflow).backward(inputs=(output,))
                         grad = grad + output.grad.detach()
-                    else:
-                        loss_reflow = torch.zeros([], device=latents.device)
+                        losses["g_loss_reflow"] = loss_reflow
 
                     if args.weight_p != 0:
                         snr = compute_snr(timestep.to(dtype=torch.long))
@@ -1324,25 +1342,29 @@ def main():
                             snr = snr[..., None]
                         grad = grad * snr ** args.weight_p
 
-                    grad = grad * args.gan_weight
-
                     # Use the sample gradient to approximate the effect of one sampling step on the final output
                     generator_output.backward(grad)
 
-                    return (loss_teacher, loss_reflow)
+                    return losses
                 
                 target_samples = teacher_samples if args.reflow_from_teacher else samples
 
                 if args.multistep:
+                    steps = input_latents.shape[0]
+                    losses = {}
                     loss_teacher = loss_reflow = 0
-                    for i in range(input_latents.shape[0]):
-                        loss_teacher_step, loss_reflow_step = run_generator_loss_backward(target_samples, sample_grad, input_latents[i], timesteps[i][None], encoder_hidden_states)
-                        loss_teacher = loss_teacher + loss_teacher_step
-                        loss_reflow = loss_reflow + loss_reflow_step
-                    loss_teacher = loss_teacher / input_latents.shape[0]
-                    loss_reflow = loss_reflow / input_latents.shape[0]
+                    for i in range(steps):
+                        step_losses = run_generator_loss_backward(
+                            target_samples, 
+                            sample_grad, 
+                            input_latents[i], 
+                            timesteps[i][None], 
+                            encoder_hidden_states,
+                            1.0 / steps)
+                        for key, value in step_losses.items():
+                            losses[key] = value + losses.get(key, 0.0)
                 else:
-                    loss_teacher, loss_reflow = run_generator_loss_backward(target_samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states)
+                    losses = run_generator_loss_backward(target_samples, sample_grad, sample_input_latents, timesteps[sample_steps], encoder_hidden_states, 1.0)
 
                 # Generator optimization step
                 optimizer.step()
@@ -1353,20 +1375,18 @@ def main():
                     del input_latents
                 else:
                     del sample_input_latents
+                    
+                losses["d_loss_real"] = loss_d_real
+                losses["d_loss_fake"] = loss_d_fake
+                losses["g_loss_gan"] = loss_g_gan
                 
-                avg_loss_d_real = accelerator.gather(loss_d_real.repeat(args.train_batch_size)).mean().detach()
-                avg_loss_d_fake = accelerator.gather(loss_d_fake.repeat(args.train_batch_size)).mean().detach()
-                avg_loss_g = accelerator.gather(loss_g.repeat(args.train_batch_size)).mean().detach()
-                avg_loss_teacher = accelerator.gather(loss_teacher.repeat(args.train_batch_size)).mean().detach()
-                avg_loss_reflow = accelerator.gather(loss_reflow.repeat(args.train_batch_size)).mean().detach()
+                avg_losses = {}
+                for key in losses:
+                    avg_losses[key] = accelerator.gather(losses[key].repeat(args.train_batch_size)).mean().detach().item()
                 
             logs = {
-                "d_loss": (avg_loss_d_real.item() + avg_loss_d_fake.item()),
-                "d_loss_real": avg_loss_d_real.item(),
-                "d_loss_fake": avg_loss_d_fake.item(),
-                "g_loss": avg_loss_g.item(),
-                "teacher_loss": avg_loss_teacher.item(),
-                "reflow_loss": avg_loss_reflow.item(),
+                **avg_losses,
+                "d_loss": (avg_losses["d_loss_real"] + avg_losses["d_loss_fake"]),
                 "d_lr": lr_scheduler_discriminator.get_last_lr()[0],
                 "g_lr": lr_scheduler.get_last_lr()[0]
             }
