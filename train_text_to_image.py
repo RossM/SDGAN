@@ -1191,7 +1191,7 @@ def main():
                     
         losses["g_loss_gan"]  = loss_g_gan.detach()
 
-        return sample_grad
+        return sample_grad, sample_logits
 
     @torch.no_grad()
     def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
@@ -1301,7 +1301,7 @@ def main():
         return losses
                 
     def generator_step(losses, d_fake_input, d_timesteps, encoder_hidden_states, teacher_samples, fake_samples, input_latents, timesteps, sample_steps):                
-        sample_grad = get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states)
+        sample_grad, sample_logits = get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states)
         
         target_samples = teacher_samples if args.reflow_from_teacher else fake_samples,
                     
@@ -1329,6 +1329,8 @@ def main():
         optimizer.step()
         optimizer.zero_grad()
         lr_scheduler.step()
+
+        return sample_logits
         
     def get_discriminator_input(batch, fake_samples, teacher_samples, timesteps, sample_steps):
         bsz = fake_samples.shape[0]
@@ -1396,7 +1398,7 @@ def main():
         
         del d_real_input
 
-        generator_step(
+        sample_logits = generator_step(
             losses, 
             d_fake_input, 
             d_timesteps, 
@@ -1407,6 +1409,8 @@ def main():
             timesteps, 
             sample_steps,
             )
+
+        return fake_samples, sample_logits, d_timesteps
         
     def training_loop():               
         nonlocal global_step        
@@ -1424,7 +1428,7 @@ def main():
 
                 with accelerator.accumulate(unet):
                     losses = {}
-                    training_step(losses, batch)
+                    samples, sample_logits, d_timesteps = training_step(losses, batch)
 
                     avg_losses = {}
                     for key in losses:
