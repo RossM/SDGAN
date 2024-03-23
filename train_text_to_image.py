@@ -1248,14 +1248,16 @@ def main():
                     
         return model_output                    
                     
-    def run_generator_loss_backward(teacher_samples, target_samples, grad, latents, timestep, encoder_hidden_states, loss_weight = 1.0):
+    def run_generator_loss_backward(fake_samples, teacher_samples, grad, latents, timestep, encoder_hidden_states, loss_weight = 1.0):
         timestep = timestep.to(dtype=torch.long)
         losses = {}
 
         if args.teacher_forcing:
             with torch.no_grad():
                 teacher_output = frozen_unet(latents, timestep, encoder_hidden_states).sample
-                            
+
+        target_samples = teacher_samples if args.reflow_from_teacher else fake_samples
+                                                
         # Do sample forward pass again, this time with gradient information
         generator_output = unet(latents, timestep, encoder_hidden_states).sample
 
@@ -1271,7 +1273,7 @@ def main():
             del loss_teacher_forcing
                         
         if args.teacher_matching:
-            output = teacher_samples.detach()
+            output = fake_samples.detach()
             output.requires_grad = True
             loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
             (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
@@ -1303,16 +1305,14 @@ def main():
     def generator_step(losses, d_fake_input, d_timesteps, encoder_hidden_states, teacher_samples, fake_samples, input_latents, timesteps, sample_steps):                
         sample_grad, sample_logits = get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states)
         
-        target_samples = teacher_samples if args.reflow_from_teacher else fake_samples,
-                    
         if args.multistep:
             steps = input_latents.shape[0]
             losses = {}
             loss_teacher = loss_reflow = 0
             for i in range(steps):
                 step_losses = run_generator_loss_backward(
+                    fake_samples,
                     teacher_samples,
-                    target_samples, 
                     sample_grad, 
                     input_latents[i], 
                     timesteps[i][None], 
@@ -1321,7 +1321,7 @@ def main():
                 for key, value in step_losses.items():
                     losses[key] = value + losses.get(key, 0.0)
         else:
-            step_losses = run_generator_loss_backward(teacher_samples, target_samples, sample_grad, input_latents[0], timesteps[sample_steps], encoder_hidden_states, 1.0)
+            step_losses = run_generator_loss_backward(fake_samples, teacher_samples, sample_grad, input_latents[0], timesteps[sample_steps], encoder_hidden_states, 1.0)
             for key, value in step_losses.items():
                 losses[key] = value + losses.get(key, 0.0)
 
