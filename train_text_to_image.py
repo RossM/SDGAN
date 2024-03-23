@@ -1219,6 +1219,8 @@ def main():
                 d_samples.requires_grad = True
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
                 loss_g = F.binary_cross_entropy_with_logits(discriminator_output, torch.ones_like(discriminator_output))
+
+                sample_logits = discriminator_output.detach()
                 
                 # Get gradient of generator loss with respect to the sample
                 loss_g.backward(inputs=(d_samples,))
@@ -1416,7 +1418,7 @@ def main():
                                 tracker.log(
                                     {
                                         "sample": [
-                                            wandb.Image(image, caption=f"{i}")
+                                            wandb.Image(image, caption=f"{i}: {sample_logits[i]}")
                                             for i, image in enumerate(images)
                                         ]
                                     }
