@@ -1225,6 +1225,9 @@ def main():
                 optimizer_discriminator.zero_grad()
                 lr_scheduler_discriminator.step()
 
+                loss_d_fake = loss_d_fake.detach()
+                loss_d_real = loss_d_real.detach()
+
                 # Get generator loss
                 d_samples.requires_grad = True
                 discriminator_output = discriminator(d_samples, d_timesteps, encoder_hidden_states).sample.mean(dim=(1,2,3))
@@ -1238,10 +1241,10 @@ def main():
                     sample_grad = d_samples.grad.detach()
                 else:
                     sample_grad = -d_samples.grad.detach()
+                    
+                loss_g_gan = loss_g_gan.detach()
 
-                del discriminator_output, d_samples, d_latents
-                if args.discriminator_noise:
-                    del noise
+                del discriminator_output, d_samples, d_latents, noise
                     
                 @torch.no_grad()
                 def get_reflow_target(samples: Tensor, latents: Tensor, timesteps: Tensor):
@@ -1371,10 +1374,7 @@ def main():
                 optimizer.zero_grad()
                 lr_scheduler.step()
                 
-                if args.multistep:
-                    del input_latents
-                else:
-                    del sample_input_latents
+                del input_latents, sample_input_latents
                     
                 losses["d_loss_real"] = loss_d_real
                 losses["d_loss_fake"] = loss_d_fake
