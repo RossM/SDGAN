@@ -1408,7 +1408,9 @@ def main():
             sample_steps,
             )
         
-    def training_loop():                
+    def training_loop():               
+        nonlocal global_step        
+
         for epoch in range(first_epoch, args.num_train_epochs):
             unet.train()
             discriminator.train()
