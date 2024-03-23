@@ -1307,8 +1307,6 @@ def main():
         
         if args.multistep:
             steps = input_latents.shape[0]
-            losses = {}
-            loss_teacher = loss_reflow = 0
             for i in range(steps):
                 step_losses = run_generator_loss_backward(
                     fake_samples,
