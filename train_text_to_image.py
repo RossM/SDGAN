@@ -1277,7 +1277,10 @@ def main():
             output.requires_grad = True
             loss_teacher_matching = loss_weight * F.mse_loss(output, teacher_samples)
             (args.teacher_matching_weight * loss_teacher_matching).backward(inputs=(output,))
-            grad = grad + output.grad.detach()
+            if noise_scheduler.config.prediction_type == "sample":
+                grad = grad + output.grad.detach()
+            else:
+                grad = grad - output.grad.detach()
             losses["g_loss_teacher_matching"] = loss_teacher_matching.detach()
             del loss_teacher_matching
                         
