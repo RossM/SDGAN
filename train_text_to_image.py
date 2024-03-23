@@ -1171,8 +1171,8 @@ def main():
         optimizer_discriminator.zero_grad()
         lr_scheduler_discriminator.step()
 
-        losses["d_loss_real"] = loss_d_fake.detach()
-        losses["d_loss_fake"] = loss_d_real.detach()
+        losses["d_loss_fake"] = loss_d_fake.detach()
+        losses["d_loss_real"] = loss_d_real.detach()
 
     def get_gan_gradient(losses, d_fake_input, d_timesteps, encoder_hidden_states):
         # Get generator loss
