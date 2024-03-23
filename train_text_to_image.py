@@ -1152,7 +1152,7 @@ def main():
         
     def get_sample_input_latents(input_latents, sample_steps):
         sample_input_latents = torch.zeros_like(input_latents[0])
-        for i in range(bsz):
+        for i in range(sample_input_latents.shape[0]):
             sample_input_latents[i] = input_latents[sample_steps[i], i]
         return sample_input_latents[None, ...]
 
